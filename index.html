@@ -318,7 +318,6 @@ body{background:var(--bg);color:var(--text);font-family:'Tajawal',sans-serif;dis
 .tool-list-mini-item{padding:7px 10px;font-size:11.5px;color:var(--text2);border-bottom:1px solid var(--border);display:flex;justify-content:space-between;font-family:'IBM Plex Mono',monospace;}
 .tool-list-mini-item:last-child{border-bottom:none;}
 
-/* Composio apps modal */
 #composio-search{width:100%;padding:9px 12px;background:var(--surface2);border:1px solid var(--border2);border-radius:8px;color:var(--text);font-family:'Tajawal',sans-serif;font-size:13px;margin-bottom:12px;}
 #composio-search:focus{outline:none;border-color:var(--accent);}
 .composio-list{max-height:52vh;overflow-y:auto;display:flex;flex-direction:column;gap:6px;}
@@ -336,6 +335,9 @@ body{background:var(--bg);color:var(--text);font-family:'Tajawal',sans-serif;dis
 .composio-row-btn.use.on{background:var(--accentdim);border-color:var(--accent);color:var(--accent);}
 .composio-custom-add{display:flex;gap:8px;margin-top:12px;}
 .composio-custom-add input{flex:1;}
+.composio-refresh-row{display:flex;justify-content:flex-end;margin-bottom:8px;}
+.composio-refresh-btn{background:none;border:1px solid var(--border2);border-radius:8px;color:var(--text2);font-family:'IBM Plex Mono',monospace;font-size:11px;padding:5px 10px;cursor:pointer;transition:all .15s;}
+.composio-refresh-btn:hover{border-color:var(--accent);color:var(--accent);}
 
 #toast{display:none;position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--surface3);border:1px solid var(--border2);color:var(--text);padding:10px 20px;border-radius:10px;font-size:13px;z-index:999;font-family:'Tajawal',sans-serif;box-shadow:0 4px 20px var(--shadow);max-width:90vw;text-align:center;animation:toastIn .2s ease;}
 @keyframes toastIn{from{opacity:0;transform:translateX(-50%) translateY(10px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
@@ -524,13 +526,16 @@ body{background:var(--bg);color:var(--text);font-family:'Tajawal',sans-serif;dis
 <div class="modal-bg" id="composio-modal" onclick="closeBgClick(event,'composio-modal')">
   <div class="modal-box wide">
     <div class="modal-title">🧩 تطبيقات Composio<button class="modal-close" onclick="closeModal('composio-modal')">✕</button></div>
+    <div class="composio-refresh-row">
+      <button class="composio-refresh-btn" id="composio-refresh-btn" onclick="manualRefreshComposio()">↺ تحديث الحالة من Composio</button>
+    </div>
     <input type="text" id="composio-search" placeholder="ابحث عن تطبيق (Gmail، Slack، GitHub...)" oninput="renderComposioList()">
     <div class="composio-list" id="composio-list"></div>
     <div class="composio-custom-add">
       <input class="form-input" id="composio-custom-slug" placeholder="slug تطبيق آخر غير موجود بالقائمة (مثال: notion)">
       <button class="test-btn" onclick="addCustomComposioApp()">➕ إضافة</button>
     </div>
-    <div class="form-hint" style="margin-top:10px;">✅ = متصل ويمكن تفعيله للاستخدام الآن · 🔗 = يحتاج تسجيل دخول عبر نافذة منفصلة أولاً.</div>
+    <div class="form-hint" style="margin-top:10px;">✅ = متصل ويمكن تفعيله للاستخدام الآن · 🔗 = يحتاج تسجيل دخول (سينتقل التبويب مباشرة، ويعود تلقائياً بعد الإتمام).</div>
   </div>
 </div>
 
@@ -564,8 +569,8 @@ let cfg = {
   manualModel: false, manualModels: [],
   toolsServerUrl: 'https://ayb-bh92-tools.hf.space', toolsServerManifest: [],
   userId: '',
-  composioCustomApps: [],           // slugs أضافها المستخدم يدوياً
-  composioConnected: {},            // {slug: true} كاش محلي فقط للعرض السريع
+  composioCustomApps: [],
+  composioConnected: {},
   zep: { key: '', enabled: false }
 };
 let chats = {};
@@ -575,20 +580,16 @@ let ctrl = null;
 let atts = [];
 let prevCode = '';
 let prevLang = 'html';
-let activeTools = [];   // {type:'source'|'composio', slug, label, icon}
 let cpCode = '';
 let cpLang = 'html';
 let cpTab = 'code';
 let cpVisible = false;
 
-/* مخزن آمن لأي محتوى نصي يُستخدم من أزرار مُولَّدة ديناميكياً (كود/رسائل)
-   بدل حقن النص داخل onclick مباشرة (كان يسبب كسر الأزرار مع علامة الاقتباس ') */
 const uiStore = new Map();
 let uiStoreSeq = 0;
 function storeVal(v) { const id = 'u' + (uiStoreSeq++); uiStore.set(id, v); return id; }
 function getVal(id) { return uiStore.get(id); }
 
-/* قائمة تطبيقات Composio الشائعة (مطابقة لأسماء toolkit slugs الرسمية) */
 const COMPOSIO_APPS = [
   { slug:'gmail', name:'Gmail', icon:'📧' },
   { slug:'googlecalendar', name:'Google Calendar', icon:'📅' },
@@ -626,18 +627,68 @@ function getOrCreateUserId() {
 }
 
 /* ════════════════════════════════════════════════
+   ★ إصلاح جذري لمشكلة "تسجيل الدخول لا يُحدَّث":
+   نقرأ فوراً معاملات الرابط عند العودة من Composio،
+   قبل أي شيء آخر — هذا يجب أن يكون أول سطر تنفيذي.
+════════════════════════════════════════════════ */
+function handleComposioCallbackIfPresent() {
+  const params = new URLSearchParams(window.location.search);
+  const slug = params.get('composio_slug');
+  if (!slug) return;
+
+  // بعض تدفقات OAuth الخاصة بـ Composio لا تُرجع معامل status صريحاً عند
+  // النجاح — مجرد عودة المتصفح لرابطنا يحمل composio_slug يعني أن Composio
+  // أكمل محاولة الاتصال. نُظهر تفاؤلاً هنا فقط للتغذية الراجعة الفورية؛
+  // الحالة الحقيقية القاطعة تُؤخذ من refreshComposioConnectedStatus() لاحقاً.
+  const status = params.get('status');
+  if (status && status.toLowerCase() !== 'success') {
+    toast('⚠ لم يكتمل تسجيل الدخول لـ ' + slug + ' (الحالة: ' + status + ')');
+  } else {
+    toast('⏳ جاري تأكيد حالة الاتصال لـ ' + slug + '...');
+  }
+
+  const cleanUrl = window.location.origin + window.location.pathname;
+  window.history.replaceState({}, document.title, cleanUrl);
+
+  // نفتح نافذة Composio تلقائياً حتى يرى المستخدم التأكيد النهائي مباشرة
+  window.__composioReturnSlug = slug;
+}
+
+/* ════════════════════════════════════════════════
+   ★ مصدر الحقيقة الفعلي لحالة الاتصال: نسأل Composio
+   نفسها عبر composio_list_connected_tools (نقطة تعمل
+   بشكل صحيح ومؤكَّد في الباك إند، وتُرجع slug مسطّحاً
+   وجاهزاً بدون أي تركيب متداخل يحتاج تخميناً)
+════════════════════════════════════════════════ */
+async function refreshComposioConnectedStatus() {
+  if (!cfg.toolsServerUrl) return;
+  try {
+    const data = await callToolDirect('composio_list_connected_tools', {});
+    const items = data.connected_tools || data.items || [];
+    const updated = {};
+    items.forEach(it => {
+      if (it.slug) updated[it.slug] = String(it.status || '').toUpperCase() === 'ACTIVE';
+    });
+    cfg.composioConnected = { ...cfg.composioConnected, ...updated };
+    localStorage.setItem('9r_cfg', JSON.stringify(cfg));
+  } catch(e) { /* الخادم قد لا يكون مضبوطاً بعد؛ لا نُفشل التطبيق لهذا */ }
+}
+
+/* ════════════════════════════════════════════════
    INIT
 ════════════════════════════════════════════════ */
-
-// [تعديل 1 من 3]: فحص ومعالجة التوجيه القادم من Composio كأول خطوة فورية قبل قراءة إعدادات الصفحة أو بناء العناصر لتجنب أي تأخير في تحديث الواجهة.
 (function init() {
-  handleComposioCallbackIfPresent();
+  handleComposioCallbackIfPresent();   // ★ أول سطر تنفيذي فعلياً
 
   try {
     const s = localStorage.getItem('9r_cfg');
     if (s) {
       const parsed = JSON.parse(s);
       cfg = { ...cfg, ...parsed };
+      // ★ إصلاح: رابط فارغ محفوظ من جلسة سابقة كان يُلغي الرابط الافتراضي
+      // بصمت (لأن '' قيمة صريحة تكسب على الافتراضي عند الدمج أعلاه)،
+      // فتظهر قائمة (+) بلا أي أدوات دون أي رسالة تفسّر السبب.
+      if (!cfg.toolsServerUrl) cfg.toolsServerUrl = 'https://ayb-bh92-tools.hf.space';
       cfg.zep = { key:'', enabled:false, ...(parsed.zep||{}) };
       cfg.composioConnected = parsed.composioConnected || {};
       cfg.composioCustomApps = parsed.composioCustomApps || [];
@@ -653,6 +704,8 @@ function getOrCreateUserId() {
       if (!chats[id].created) chats[id].created = Date.now();
       if (!chats[id].title) chats[id].title = 'محادثة';
       if (!chats[id].codePanel) chats[id].codePanel = { code:'', lang:'html', tab:'code', visible:false };
+      if (!chats[id].toolToggles) chats[id].toolToggles = { webSearch:false, context7:false, other:false };
+      if (!chats[id].composioActiveSlugs) chats[id].composioActiveSlugs = [];
     });
   } catch(e){ chats = {}; }
 
@@ -707,8 +760,29 @@ function getOrCreateUserId() {
         cfg.toolsServerManifest = list;
         localStorage.setItem('9r_cfg', JSON.stringify(cfg));
         renderToolsServerList(list);
+      } else {
+        toast('⚠ خادم الأدوات متصل لكن لم يُرجع أي أدوات');
       }
-    }).catch(()=>{});
+    }).catch(e => {
+      toast('⚠ تعذّر جلب الأدوات تلقائياً (' + e.message + ') — افتح الإعدادات واضغط "اتصال وجلب الأدوات"');
+    });
+  }
+
+  // ★ تحديث حقيقي لحالة كل اتصالات Composio من الخادم مباشرة عند الإقلاع،
+  // وخصوصاً إن كنا قد عُدنا للتو من رابط تسجيل دخول (window.__composioReturnSlug)
+  if (cfg.toolsServerUrl) {
+    refreshComposioConnectedStatus().then(() => {
+      if (window.__composioReturnSlug) {
+        const slug = window.__composioReturnSlug;
+        delete window.__composioReturnSlug;
+        if (cfg.composioConnected[slug]) {
+          toast('✅ تم تأكيد تسجيل الدخول: ' + slug);
+        } else {
+          toast('⚠ لم يُؤكَّد الاتصال بعد لـ ' + slug + ' — افتح قائمة Composio واضغط "تحديث الحالة"');
+        }
+        openComposioModal();
+      }
+    });
   }
 
   document.addEventListener('click', (e) => {
@@ -720,8 +794,6 @@ function getOrCreateUserId() {
     }
   });
 
-  /* تفويض أحداث موحّد لكل الأزرار الديناميكية (كود، نسخ، معاينة، تنزيل)
-     بدل onclick مضمّن يحقن نصاً — يمنع كسر الواجهة أو أي احتمال حقن HTML/JS */
   document.addEventListener('click', (e) => {
     const el = e.target.closest('[data-ui-act]');
     if (!el) return;
@@ -912,12 +984,12 @@ async function testToolsServer() {
     renderToolsServerList(tools);
     setTestResult('tools-server','ok', tools.length ? `✅ تم الاتصال — ${tools.length} أداة متاحة` : '⚠ الخادم يعمل لكن لا توجد أدوات');
     rebuildPlusMenu();
+    refreshComposioConnectedStatus();
   } catch(e) {
     setTestResult('tools-server','err','❌ فشل: ' + e.message);
   }
 }
 
-/* تنفيذ أداة عبر خادم الأدوات — تُستخدم من طرف الوكيل (sendWithTools) */
 async function executeExternalTool(name, args) {
   const base = (cfg.toolsServerUrl || '').trim().replace(/\/+$/, '');
   if (!base) return { text: 'خطأ: رابط خادم الأدوات غير مضبوط في الإعدادات', fileUrl: null, fileName: null };
@@ -941,7 +1013,6 @@ async function executeExternalTool(name, args) {
   }
 }
 
-/* نداء مباشر لأداة عبر /call (يُسخدم من واجهة المستخدم مباشرة، وليس من طرف النموذج) */
 async function callToolDirect(name, args) {
   const base = (cfg.toolsServerUrl || '').trim().replace(/\/+$/, '');
   if (!base) throw new Error('رابط خادم الأدوات غير مضبوط');
@@ -993,16 +1064,33 @@ function buildGeneratedFileCard(file) {
 }
 
 /* ════════════════════════════════════════════════
-   COMPOSIO — فصل التطبيقات + تسجيل دخول منفصل
+   COMPOSIO — تسجيل دخول بتنقّل مباشر (بدون نافذة منبثقة
+   وبدون أي استطلاع بمؤقّت) + تحقق حقيقي من الحالة عبر
+   composio_list_connected_tools بدل التخمين أو الثقة
+   العمياء بمعاملات الرابط
 ════════════════════════════════════════════════ */
 function allComposioApps() {
   const custom = (cfg.composioCustomApps || []).map(slug => ({ slug, name: slug, icon: '🧩' }));
   return [...COMPOSIO_APPS, ...custom];
 }
 
-function openComposioModal() {
+async function openComposioModal() {
   document.getElementById('composio-modal').classList.add('open');
+  renderComposioList();               // عرض فوري بالحالة المخزّنة محلياً أولاً
+  await refreshComposioConnectedStatus();
+  renderComposioList();               // إعادة رسم بالحالة الحقيقية المؤكَّدة
+}
+
+async function manualRefreshComposio() {
+  const btn = document.getElementById('composio-refresh-btn');
+  const orig = btn.textContent;
+  btn.textContent = '⏳ جاري التحديث...';
+  btn.disabled = true;
+  await refreshComposioConnectedStatus();
   renderComposioList();
+  btn.textContent = orig;
+  btn.disabled = false;
+  toast('✅ تم تحديث حالة جميع التطبيقات');
 }
 
 function renderComposioList() {
@@ -1011,14 +1099,20 @@ function renderComposioList() {
   const apps = allComposioApps().filter(a => !q || a.name.toLowerCase().includes(q) || a.slug.includes(q));
   if (!apps.length) { list.innerHTML = '<div class="pm-empty">لا نتائج</div>'; return; }
 
+  const chat = getChat();
+  const activeSlugs = (chat && chat.composioActiveSlugs) || [];
+
   list.innerHTML = apps.map(app => {
     const connected = !!cfg.composioConnected[app.slug];
-    const inUse = activeTools.some(t => t.type === 'composio' && t.slug === app.slug);
+    const inUse = activeSlugs.includes(app.slug);
+    // ★ فور تسجيل الدخول بنجاح، يتحول الزر مباشرة إلى علامة خضراء ✅
+    //   بدل نص "تسجيل الدخول" — وهذا الزر نفسه يُستخدم لتفعيل/تعطيل
+    //   الأداة للوكيل (طول عمر المحادثة، وليس لرسالة واحدة فقط)
     const statusHtml = connected
       ? `<span class="composio-row-status connected">✅ متصل</span>`
       : `<span class="composio-row-status off">⚪ غير متصل</span>`;
     const actionBtn = connected
-      ? `<button class="composio-row-btn use ${inUse?'on':''}" data-composio-toggle="${esc(app.slug)}" data-composio-name="${esc(app.name)}" data-composio-icon="${esc(app.icon)}">${inUse ? '✓ مُفعَّل' : 'تفعيل للاستخدام'}</button>`
+      ? `<button class="composio-row-btn use ${inUse?'on':''}" data-composio-toggle="${esc(app.slug)}" data-composio-name="${esc(app.name)}" data-composio-icon="${esc(app.icon)}">${inUse ? '✅ مُفعَّل للوكيل' : '✅ تفعيل للوكيل'}</button>`
       : `<button class="composio-row-btn connect" data-composio-connect="${esc(app.slug)}">🔗 تسجيل الدخول</button>`;
     return `<div class="composio-row">
       <span class="composio-row-icon">${app.icon}</span>
@@ -1053,14 +1147,23 @@ function addCustomComposioApp() {
   toast('✅ تمت الإضافة: ' + slug);
 }
 
+/* ★ التفعيل الآن مرتبط بالمحادثة الحالية ويبقى فعّالاً طوال عمرها
+   (لا يُصفَّر بعد كل رسالة كما كان سابقاً) */
 function toggleComposioToolActive(slug, name, icon) {
-  const idx = activeTools.findIndex(t => t.type === 'composio' && t.slug === slug);
-  if (idx >= 0) activeTools.splice(idx, 1);
-  else activeTools.push({ type: 'composio', slug, label: name || slug, icon: icon || '🧩' });
+  const chat = getChat();
+  if (!chat) return;
+  if (!chat.composioActiveSlugs) chat.composioActiveSlugs = [];
+  const idx = chat.composioActiveSlugs.indexOf(slug);
+  if (idx >= 0) chat.composioActiveSlugs.splice(idx, 1);
+  else chat.composioActiveSlugs.push(slug);
+  saveChats();
   renderToolsStrip();
+  rebuildPlusMenu();
 }
 
-// [تعديل 2 من 3]: إعادة بناء دالة connectComposioApp بالكامل لتدعم التوجيه المباشر (Direct Redirection) وحفظ بيانات الجلسة وسيلةً لنقل المعرّفات الآمنة، مِمّا يحل مشكلة تجميد المتصفحات في الموبايل والتبويبات الخلفية نهائياً.
+/* ★ الإصلاح الجراحي الأساسي: تنقّل مباشر بنفس التبويب (لا نافذة منبثقة،
+   لا setInterval/setTimeout بانتظار حالة) — يتجنّب تجميد المتصفحات
+   المحمولة لمؤقّتات التبويبات الخلفية بالكامل */
 async function connectComposioApp(slug, btnEl) {
   if (!cfg.toolsServerUrl) { toast('⚠ أضف رابط خادم الأدوات من الإعدادات أولاً'); return; }
   const uid = getOrCreateUserId();
@@ -1074,10 +1177,8 @@ async function connectComposioApp(slug, btnEl) {
     if (session.error) throw new Error(session.error);
     const sessionId = session.session_id;
 
-    // بناء الرابط الحامل لمعرف السلوج لـ callback_url في نفس الصفحة الحالية
     const cbUrl = window.location.origin + window.location.pathname
-      + '?composio_slug=' + encodeURIComponent(slug)
-      + '&composio_session=' + encodeURIComponent(sessionId);
+      + '?composio_slug=' + encodeURIComponent(slug);
 
     const authRes = await callToolDirect('composio_authorize_toolkit', {
       session_id: sessionId, toolkit: slug, callback_url: cbUrl
@@ -1086,46 +1187,12 @@ async function connectComposioApp(slug, btnEl) {
     const redirectUrl = authRes.redirect_url || authRes.redirectUrl;
     if (!redirectUrl) throw new Error('لم يُرجع الخادم رابط تسجيل دخول صالحاً');
 
-    // توجيه المتصفح كلياً لصفحة التسجيل بدلاً من استخدام popup
     window.location.href = redirectUrl;
   } catch(e) {
     toast('❌ فشل بدء تسجيل الدخول: ' + e.message);
     btnEl.textContent = origText;
     btnEl.disabled = false;
   }
-}
-
-// [تعديل 3 من 3]: حذف دالة pollComposioConnection بالكامل وتأسيس دالة handleComposioCallbackIfPresent البديلة، والتي تقوم بقراءة حالة التوجيه فور عودة المستخدم من Composio للواجهة ومعالجة حفظ وتخزين البيانات.
-function handleComposioCallbackIfPresent() {
-  const params = new URLSearchParams(window.location.search);
-  const slug = params.get('composio_slug');
-  const status = params.get('status');
-  if (!slug) return;
-
-  // وجود المعامل composio_slug بعد إعادة توجيه الخادم يدل على محاولة الترخيص
-  if (status === 'success' || !status) {
-    try {
-      let savedCfg = {};
-      const s = localStorage.getItem('9r_cfg');
-      if (s) savedCfg = JSON.parse(s);
-      
-      if (!savedCfg.composioConnected) savedCfg.composioConnected = {};
-      savedCfg.composioConnected[slug] = true;
-      localStorage.setItem('9r_cfg', JSON.stringify(savedCfg));
-      
-      // مزامنة حالة التطبيق الحالي في الذاكرة الحية للتطبيق
-      cfg.composioConnected = savedCfg.composioConnected;
-    } catch(e) {
-      cfg.composioConnected[slug] = true;
-    }
-    toast('✅ تم تسجيل الدخول بنجاح: ' + slug);
-  } else {
-    toast('⚠ لم يكتمل تسجيل الدخول لـ ' + slug + ' (الحالة: ' + status + ')');
-  }
-
-  // تنظيف شريط العنوان للحفاظ على نظافة الرابط وخصوصية البيانات
-  const cleanUrl = window.location.origin + window.location.pathname;
-  window.history.replaceState({}, document.title, cleanUrl);
 }
 
 /* ════════════════════════════════════════════════
@@ -1213,14 +1280,15 @@ function newChat() {
   const id = 'c' + Date.now();
   chats[id] = {
     title: 'محادثة جديدة', msgs: [], created: Date.now(), zepSession: 'sess_' + id,
-    codePanel: { code:'', lang:'html', tab:'code', visible:false }
+    codePanel: { code:'', lang:'html', tab:'code', visible:false },
+    toolToggles: { webSearch:false, context7:false, other:false },
+    composioActiveSlugs: []
   };
   currentChatId = id;
   saveChats();
   renderSidebar();
   renderMsgs();
   updateCtxBadge();
-  activeTools = [];
   renderToolsStrip();
 
   cpCode = ''; cpLang = 'html'; cpTab = 'code'; cpVisible = false;
@@ -1240,11 +1308,12 @@ function loadChat(id) {
   currentChatId = id;
   if (!chats[id].zepSession) chats[id].zepSession = 'sess_' + id;
   if (!chats[id].codePanel) chats[id].codePanel = { code:'', lang:'html', tab:'code', visible:false };
+  if (!chats[id].toolToggles) chats[id].toolToggles = { webSearch:false, context7:false, other:false };
+  if (!chats[id].composioActiveSlugs) chats[id].composioActiveSlugs = [];
   localStorage.setItem('9r_last', id);
   renderSidebar();
   renderMsgs();
   updateCtxBadge();
-  activeTools = [];
   renderToolsStrip();
 
   const cp = chats[id].codePanel;
@@ -1364,9 +1433,9 @@ function renderMsgs() {
     if (m.role === 'user') {
       grp.innerHTML = `<div class="msg-row user"><div class="msg-av">أنت</div><div class="msg-content"><div class="msg-name">أنت</div><div class="msg-text">${esc(m.text)}</div></div></div>`;
     } else {
-      const thinkMatch = m.text.match(/<details><summary>Reasoning</summary>([\s\S]*?)<\/think>/);
+      const thinkMatch = m.text.match(/<think>([\s\S]*?)<\/think>/);
       const thinkContent = thinkMatch ? thinkMatch[1].trim() : '';
-      let cleanText = m.text.replace(/<details><summary>Reasoning</summary>[\s\S]*?<\/think>/g, '').trim();
+      let cleanText = m.text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
       const genFiles = extractGeneratedFiles(cleanText);
       cleanText = stripGeneratedFileMarkers(cleanText).trim();
 
@@ -1703,8 +1772,29 @@ async function zepAddMemory(sessionId, userText, aiText) {
 }
 
 /* ════════════════════════════════════════════════
-   قائمة (+) — مفصولة: مرفقات / أدوات عامة / Composio منفصل تماماً
+   قائمة (+)
 ════════════════════════════════════════════════ */
+/* ════════════════════════════════════════════════
+   تصنيف ديناميكي للأدوات القادمة من خادم الأدوات —
+   بالاعتماد على بادئة اسم الدالة فقط، وليس قائمة ثابتة
+   في الواجهة. هذا يعني أن أي أداة جديدة تُضاف لاحقاً في
+   main.py (غير Firecrawl/Context7/Composio) ستُصنَّف
+   تلقائياً ضمن "أدوات أخرى" وتُحسب وتُستخدم فور تفعيل
+   ذلك الزر — دون أي تعديل مطلوب هنا في الواجهة.
+════════════════════════════════════════════════ */
+function categorizeManifest() {
+  const manifest = cfg.toolsServerManifest || [];
+  const groups = { webSearch: [], context7: [], composio: [], other: [] };
+  manifest.forEach(t => {
+    const name = t.function?.name || '';
+    if (name.startsWith('firecrawl_')) groups.webSearch.push(name);
+    else if (name.startsWith('context7_')) groups.context7.push(name);
+    else if (name.startsWith('composio_')) groups.composio.push(name);
+    else groups.other.push(name);
+  });
+  return groups;
+}
+
 function togglePlusMenu() {
   const menu = document.getElementById('plus-menu');
   const btn = document.getElementById('plus-btn');
@@ -1713,11 +1803,14 @@ function togglePlusMenu() {
   if (open) rebuildPlusMenu();
 }
 
-function isSourceActive(slug) { return activeTools.some(t => t.type === 'source' && t.slug === slug); }
-function toggleSourceTool(slug, label, icon) {
-  const idx = activeTools.findIndex(t => t.type === 'source' && t.slug === slug);
-  if (idx >= 0) activeTools.splice(idx, 1);
-  else activeTools.push({ type: 'source', slug, label, icon });
+/* تفعيل/تعطيل مجموعة أدوات — الحالة تبقى فعّالة طوال عمر المحادثة
+   الحالية (لا تُصفَّر بعد كل رسالة) حتى يُعطّلها المستخدم بنفسه */
+function toggleChatToolGroup(key) {
+  const chat = getChat();
+  if (!chat) return;
+  if (!chat.toolToggles) chat.toolToggles = { webSearch:false, context7:false, other:false };
+  chat.toolToggles[key] = !chat.toolToggles[key];
+  saveChats();
   rebuildPlusMenu();
   renderToolsStrip();
 }
@@ -1725,6 +1818,10 @@ function toggleSourceTool(slug, label, icon) {
 function rebuildPlusMenu() {
   const menu = document.getElementById('plus-menu');
   const hasManifest = cfg.toolsServerManifest && cfg.toolsServerManifest.length;
+  const chat = getChat();
+  const toggles = (chat && chat.toolToggles) || { webSearch:false, context7:false, other:false };
+  const composioActiveCount = (chat && chat.composioActiveSlugs && chat.composioActiveSlugs.length) || 0;
+  const connectedCount = Object.values(cfg.composioConnected || {}).filter(Boolean).length;
 
   let html = `<div class="pm-item" data-attach="1"><span class="pm-item-icon">📎</span><span class="pm-item-label">إرفاق ملف / صورة</span></div><div class="pm-divider"></div>`;
 
@@ -1733,15 +1830,17 @@ function rebuildPlusMenu() {
   } else if (!hasManifest) {
     html += `<div class="pm-empty">اضغط "اتصال وجلب الأدوات" في الإعدادات</div>`;
   } else {
-    html += `<div class="pm-sec-title">تفعيل الأدوات</div>`;
-    html += `<div class="pm-item ${isSourceActive('firecrawl')?'on':''}" data-src="firecrawl" data-label="🔥 بحث الويب (Firecrawl)" data-icon="🔥"><span class="pm-item-icon">🔥</span><span class="pm-item-label">بحث الويب (Firecrawl)</span></div>`;
-    html += `<div class="pm-item ${isSourceActive('context7')?'on':''}" data-src="context7" data-label="📚 توثيق المكتبات (Context7)" data-icon="📚"><span class="pm-item-icon">📚</span><span class="pm-item-label">توثيق المكتبات (Context7)</span></div>`;
-    html += `<div class="pm-item ${isSourceActive('documents')?'on':''}" data-src="documents" data-label="📄 أدوات المستندات" data-icon="📄"><span class="pm-item-icon">📄</span><span class="pm-item-label">أدوات المستندات (Word/PDF/Excel)</span></div>`;
+    const groups = categorizeManifest();
 
-    const composioCount = activeTools.filter(t => t.type === 'composio').length;
+    html += `<div class="pm-sec-title">تفعيل الأدوات (تبقى فعّالة طوال هذه المحادثة)</div>`;
+
+    html += toggleRow('webSearch', '🔥', `البحث في الإنترنت (Firecrawl)`, groups.webSearch.length, toggles.webSearch);
+    html += toggleRow('context7', '📚', `توثيق المكتبات (Context7)`, groups.context7.length, toggles.context7);
+    html += toggleRow('other', '📄', `أدوات أخرى (مستندات وملفات)`, groups.other.length, toggles.other);
+
     html += `<div class="pm-divider"></div><div class="pm-item" data-open-composio="1">
       <span class="pm-item-icon">🧩</span>
-      <span class="pm-item-label">Composio — تطبيقات خارجية${composioCount ? ` (${composioCount} مُفعَّلة)` : ''}</span>
+      <span class="pm-item-label">Composio — تطبيقات خارجية (${connectedCount} متصلة${composioActiveCount ? ` · ${composioActiveCount} مُفعَّلة` : ''})</span>
       <span class="pm-arrow">‹</span>
     </div>`;
   }
@@ -1753,8 +1852,8 @@ function rebuildPlusMenu() {
     menu.classList.remove('open');
     document.getElementById('plus-btn').classList.remove('active');
   });
-  menu.querySelectorAll('[data-src]').forEach(item => {
-    item.addEventListener('click', () => toggleSourceTool(item.dataset.src, item.dataset.label, item.dataset.icon));
+  menu.querySelectorAll('[data-tool-group]').forEach(item => {
+    item.addEventListener('click', () => toggleChatToolGroup(item.dataset.toolGroup));
   });
   menu.querySelector('[data-open-composio]')?.addEventListener('click', () => {
     menu.classList.remove('open');
@@ -1763,14 +1862,55 @@ function rebuildPlusMenu() {
   });
 }
 
+/* صف بمفتاح تفعيل/تعطيل حقيقي (Switch) بدل مجرد تظليل — أوضح بصرياً
+   لمفهوم "قابل للتفعيل والتعطيل" الذي طلبه المستخدم صراحة */
+function toggleRow(key, icon, label, count, isOn) {
+  return `<div class="pm-item" data-tool-group="${key}" style="cursor:pointer;">
+    <span class="pm-item-icon">${icon}</span>
+    <span class="pm-item-label">${esc(label)}${count ? ` <span class="pm-item-sub">(${count})</span>` : ''}</span>
+    <label class="switch" style="pointer-events:none;">
+      <input type="checkbox" ${isOn ? 'checked' : ''} readonly>
+      <span class="switch-slider"></span>
+    </label>
+  </div>`;
+}
+
 function renderToolsStrip() {
   const strip = document.getElementById('tools-strip');
-  if (!activeTools.length) { strip.classList.remove('show'); strip.innerHTML=''; return; }
+  const chat = getChat();
+  const toggles = (chat && chat.toolToggles) || {};
+  const composioSlugs = (chat && chat.composioActiveSlugs) || [];
+  const groups = categorizeManifest();
+
+  const chips = [];
+  if (toggles.webSearch) chips.push({ key:'webSearch', icon:'🔥', label:'بحث الويب' });
+  if (toggles.context7) chips.push({ key:'context7', icon:'📚', label:'توثيق المكتبات' });
+  if (toggles.other) chips.push({ key:'other', icon:'📄', label:`أدوات أخرى (${groups.other.length})` });
+  composioSlugs.forEach(slug => {
+    const app = allComposioApps().find(a => a.slug === slug);
+    chips.push({ key:'composio:' + slug, icon: app ? app.icon : '🧩', label: app ? app.name : slug });
+  });
+
+  if (!chips.length) { strip.classList.remove('show'); strip.innerHTML=''; return; }
   strip.classList.add('show');
-  strip.innerHTML = activeTools.map((t,i) => `<div class="tool-chip"><span>${t.icon}</span><span>${esc(t.label)}</span><button class="tool-chip-del" data-remove-tool="${i}">✕</button></div>`).join('');
-  strip.querySelectorAll('[data-remove-tool]').forEach(btn => btn.addEventListener('click', () => removeActiveTool(parseInt(btn.dataset.removeTool))));
+  strip.innerHTML = chips.map(c => `<div class="tool-chip"><span>${c.icon}</span><span>${esc(c.label)}</span><button class="tool-chip-del" data-remove-chip="${esc(c.key)}">✕</button></div>`).join('');
+  strip.querySelectorAll('[data-remove-chip]').forEach(btn => btn.addEventListener('click', () => removeToolChip(btn.dataset.removeChip)));
 }
-function removeActiveTool(i) { activeTools.splice(i,1); rebuildPlusMenu(); renderToolsStrip(); }
+
+function removeToolChip(key) {
+  const chat = getChat();
+  if (!chat) return;
+  if (key.startsWith('composio:')) {
+    const slug = key.slice('composio:'.length);
+    chat.composioActiveSlugs = (chat.composioActiveSlugs || []).filter(s => s !== slug);
+  } else {
+    if (!chat.toolToggles) chat.toolToggles = { webSearch:false, context7:false, other:false };
+    chat.toolToggles[key] = false;
+  }
+  saveChats();
+  rebuildPlusMenu();
+  renderToolsStrip();
+}
 
 /* ════════════════════════════════════════════════
    ATTACHMENTS
@@ -1814,23 +1954,23 @@ function httpErrMsg(status) {
 }
 
 /* ════════════════════════════════════════════════
-   بناء قائمة الأدوات الفعلية المُرسَلة للنموذج بناءً على اختيار المستخدم
+   بناء قائمة الأدوات المُرسَلة للنموذج — من حالة
+   المحادثة الدائمة (لا تُصفَّر بعد كل رسالة)
 ════════════════════════════════════════════════ */
-const TOOL_GROUPS = {
-  firecrawl: ['firecrawl_search','firecrawl_scrape'],
-  context7: ['context7_resolve_library','context7_get_docs'],
-  documents: ['create_docx','create_pptx','create_pdf','read_pdf','pdf_info','create_xlsx','read_xlsx','markdown_to_html'],
-  composio: ['composio_list_connected_tools','composio_list_tools','composio_execute_tool','composio_create_session','composio_get_session','composio_session_toolkits']
-};
-
 function buildActiveManifestAndNote() {
-  if (!activeTools.length || !cfg.toolsServerManifest) return { tools: [], note: '' };
+  const chat = getChat();
+  if (!chat || !cfg.toolsServerManifest || !cfg.toolsServerManifest.length) return { tools: [], note: '' };
+
+  const toggles = chat.toolToggles || {};
+  const composioSlugs = chat.composioActiveSlugs || [];
+  const groups = categorizeManifest();
   const names = new Set();
-  const composioSlugs = [];
-  activeTools.forEach(t => {
-    if (t.type === 'source' && TOOL_GROUPS[t.slug]) TOOL_GROUPS[t.slug].forEach(n => names.add(n));
-    if (t.type === 'composio') { TOOL_GROUPS.composio.forEach(n => names.add(n)); composioSlugs.push(t.slug); }
-  });
+
+  if (toggles.webSearch) groups.webSearch.forEach(n => names.add(n));
+  if (toggles.context7) groups.context7.forEach(n => names.add(n));
+  if (toggles.other) groups.other.forEach(n => names.add(n));
+  if (composioSlugs.length) groups.composio.forEach(n => names.add(n));
+
   const tools = cfg.toolsServerManifest.filter(t => names.has(t.function?.name));
   let note = '';
   if (composioSlugs.length) {
@@ -1860,8 +2000,9 @@ async function sendMsg() {
 
   const curAtts = [...atts];
   atts = []; renderAtts();
+  // ★ الأدوات المفعّلة تبقى كما هي بعد الإرسال (لا تُصفَّر) — تبقى فعّالة
+  //   طوال عمر هذه المحادثة تحديداً حتى يُعطّلها المستخدم بنفسه
   const { tools: usedToolsManifest, note: toolsNote } = buildActiveManifestAndNote();
-  activeTools = []; renderToolsStrip();
 
   const userText = text || '📎 مرفق';
   chat.msgs.push({ role:'user', text: userText, model: '' });
@@ -1900,7 +2041,7 @@ async function sendMsg() {
         apiMsgs.push({ role:'user', content });
       }
     } else {
-      apiMsgs.push({ role:'assistant', content: m.text.replace(/<details><summary>Reasoning</summary>[\s\S]*?<\/think>/g,'').trim() });
+      apiMsgs.push({ role:'assistant', content: m.text.replace(/<think>[\s\S]*?<\/think>/g,'').trim() });
     }
   });
 
@@ -1964,7 +2105,7 @@ async function sendStreaming(apiMsgs, model, tyGrp, msgsEl, chat, userText) {
 
   parser.onText = (t) => {
     full += t; displayText += t;
-    const display = displayText.replace(/<details><summary>Reasoning</summary>[\s\S]*?<\/think>/g,'').trimStart();
+    const display = displayText.replace(/<think>[\s\S]*?<\/think>/g,'').trimStart();
     textEl.innerHTML = renderMd(display) + '<span class="stream-cursor"></span>';
     msgsEl.scrollTop = msgsEl.scrollHeight;
   };
@@ -2039,9 +2180,9 @@ async function sendWithTools(apiMsgs, model, tools, tyGrp, msgsEl, chat, userTex
 }
 
 function finishAiTurn(full, streamGrp, textEl, model, chat, userText) {
-  const thinkMatch = full.match(/<details><summary>Reasoning</summary>([\s\S]*?)<\/think>/);
+  const thinkMatch = full.match(/<think>([\s\S]*?)<\/think>/);
   const thinkContent = thinkMatch ? thinkMatch[1].trim() : '';
-  let cleanFull = full.replace(/<details><summary>Reasoning</summary>[\s\S]*?<\/think>/g,'').trim();
+  let cleanFull = full.replace(/<think>[\s\S]*?<\/think>/g,'').trim();
   const genFiles = extractGeneratedFiles(cleanFull);
   cleanFull = stripGeneratedFileMarkers(cleanFull).trim();
   textEl.innerHTML = renderMd(cleanFull);
@@ -2288,7 +2429,7 @@ function copyPrevCode() { copyToClipboard(prevCode).then(ok => toast(ok ? '✅ �
 function closePrevModal() { document.getElementById('prev-modal').classList.remove('open'); document.getElementById('prev-frame').srcdoc = ''; }
 
 /* ════════════════════════════════════════════════
-   CODE BLOCK / MESSAGE BUTTONS (تُستدعى عبر data-ui-act)
+   CODE BLOCK / MESSAGE BUTTONS
 ════════════════════════════════════════════════ */
 function copyCb(btn, code) {
   copyToClipboard(code).then(ok => { const orig = btn.textContent; btn.textContent = ok ? '✓ تم' : '❌ فشل'; setTimeout(() => btn.textContent = orig, 2000); });
