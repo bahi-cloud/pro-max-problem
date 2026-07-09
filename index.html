@@ -355,10 +355,31 @@ function slimSessions(){
       return{role:m.role,content:c,tool_calls:m.tool_calls,tool_call_id:m.tool_call_id,_files:m._files};})}));
 }
 function persist(){
-  const save=()=>localStorage.setItem(LS,JSON.stringify({cfg,sessions:slimSessions()}));
-  try{save();}
-  catch(e){try{sessions=sessions.slice(0,8);sessions.forEach(s=>{s.messages=s.messages.slice(-16);s.artifacts=(s.artifacts||[]).slice(-3);});save();renderSessions();}
-    catch(e2){try{localStorage.removeItem(LS);save();}catch{}}}
+  const trySave=()=>{localStorage.setItem(LS,JSON.stringify({cfg,sessions:slimSessions()}));return true;};
+  // مستوى 1: حفظ عادي
+  try{trySave();return;}catch(e){}
+  // مستوى 2: تقليص معتدل (٨ محادثات، ١٦ رسالة لكل واحدة)
+  try{
+    sessions=sessions.slice(0,8);
+    sessions.forEach(s=>{s.messages=(s.messages||[]).slice(-16);s.artifacts=(s.artifacts||[]).slice(-3);});
+    trySave();renderSessions();return;
+  }catch(e){}
+  // مستوى 3: تقليص قاسٍ (محادثتان فقط، بلا Artifacts محفوظة)
+  try{
+    sessions=sessions.slice(0,2);
+    sessions.forEach(s=>{s.messages=(s.messages||[]).slice(-6);s.artifacts=[];});
+    trySave();renderSessions();return;
+  }catch(e){}
+  // مستوى 4 (الأخير): امسح كل شيء وابدأ تخزيناً فارغاً — هذا المستوى مُغلَّف
+  // بالكامل بمعالجة أخطاء صامتة حتى لا يصل أي استثناء "خام" إلى المستخدم
+  // مهما كان سبب الفشل (حصة ممتلئة كلياً، وضع تصفح خاص يمنع التخزين...).
+  try{
+    localStorage.removeItem(LS);
+    sessions=cur()?[cur()]:sessions.slice(0,1);
+    trySave();renderSessions();
+  }catch(e){
+    console.warn('تعذّر حفظ البيانات محلياً حتى بعد أقصى تقليص ممكن — سيستمر التطبيق بالعمل دون حفظ دائم لهذه الجلسة.',e);
+  }
 }
 
 /* ============ 2) التشخيص ============ */
