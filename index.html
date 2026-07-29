@@ -1137,7 +1137,7 @@ async function runAgent(s,userText){
 }
 
 async function agentLoop(s,box,zepCtx){
-  const MAX_ITER=10,MAX_TOOLCALLS=30;
+  const MAX_ITER=20,MAX_TOOLCALLS=30;
   let totalCalls=0;
   for(let iter=0;iter<MAX_ITER;iter++){
     if(abortCtl.signal.aborted)throw Object.assign(new Error('stopped'),{name:'AbortError'});
