@@ -197,6 +197,7 @@ main{flex:1;display:flex;flex-direction:column;min-width:0;position:relative}
     </div>
     <button class="icnb" style="width:32px;height:32px" onclick="reloadPreview()" title="تحديث المعاينة">↻</button>
     <button class="icnb" style="width:32px;height:32px" onclick="openPreviewNewTab()" title="فتح في تبويب جديد">⬈</button>
+    <button class="icnb" style="width:32px;height:32px" onclick="copyArtifactCode()" title="نسخ الكود">📋</button>
     <button class="icnb" style="width:32px;height:32px" onclick="dlArtifact()">⬇</button>
     <button class="icnb" style="width:32px;height:32px" onclick="codePanel.classList.toggle('full')">⛶</button>
   </div>
@@ -270,7 +271,7 @@ main{flex:1;display:flex;flex-direction:column;min-width:0;position:relative}
       <div class="field" style="margin-top:8px"><input id="cfgCustomModel" placeholder="أو اكتب اسم نموذج مخصص واضغط حفظ"></div>
     </div>
     <div class="sec"><b>🧰 باك اند الأدوات</b>
-      <div class="field"><label>الرابط</label><input id="cfgTools" value="https://ayb-bh92-tools.hf.space"></div>
+      <div class="field"><label>الرابط</label><input id="cfgTools" value="https://ayb-bh92-mcp.hf.space"></div>
       <div class="field"><label>مصادقة الباك اند (إن وُجدت)</label>
         <select id="cfgBeAuth">
           <option value="none">بدون مصادقة</option>
@@ -330,7 +331,7 @@ main{flex:1;display:flex;flex-direction:column;min-width:0;position:relative}
 const LS='ai_studio_v7';
 let cfg={baseUrl:'',apiKey:'',authType:'bearer',model:'',models:[],sysPrompt:'',temp:'',maxTok:'',topP:'',
   theme:'dark',composio:{},zep:{enabled:false,key:''},chatPath:null,proxyMode:false,enabledToolNames:[],
-  backend:{url:'https://ayb-bh92-tools.hf.space',authType:'none',authKey:'',list:null,execV2:null}};
+  backend:{url:'https://ayb-bh92-mcp.hf.space',authType:'none',authKey:'',list:null,execV2:null}};
 let sessions=[],curId=null,tools=[],files=[],busy=false,abortCtl=null,curArtifact=null,testTool=null;
 const $=id=>document.getElementById(id);
 const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -354,32 +355,50 @@ function slimSessions(){
       if(typeof c==='string'&&c.length>8000)c=c.slice(0,8000)+'\n…[مقتطع]';
       return{role:m.role,content:c,tool_calls:m.tool_calls,tool_call_id:m.tool_call_id,_files:m._files};})}));
 }
+// ★ إصلاح جذري: كانت مستويات التقليص هنا (عند امتلاء حصة localStorage) تُنفَّذ
+// مباشرة على المصفوفة الحيّة sessions وعناصرها (s.messages/s.artifacts)، عبر
+// أسطر مثل "s.artifacts=(s.artifacts||[]).slice(-3)" أو "s.artifacts=[]".
+// كانت هذه أسطر "تقليص للحفظ فقط" في النية، لكنها فعلياً كانت تُعدّل حالة
+// التطبيق الحيّة نفسها — أي أن أي Artifact زائد عن آخر 3 كان يُحذف فعلياً
+// من الذاكرة (لا فقط من التخزين) بمجرد أن تفشل محاولة الحفظ الأولى بسبب
+// امتلاء الحصة، وهو أمر شائع الحدوث فور إنشاء Artifact كبير لأن persist()
+// تُستدعى مباشرة بعد كل رد. هذا هو السبب الحقيقي لرسالة "تعذر العثور على
+// هذا العنصر" التي كانت تظهر فوراً عند الضغط على الزر رغم أنه ظاهر للتو.
+// الإصلاح: كل مستويات التقليص تُبنى الآن كنسخة (snapshot) منفصلة تُرسَل إلى
+// localStorage فقط، ولا تلمس أبداً المتغيّر الحيّ sessions أو أي كائن جلسة
+// داخله — فتبقى حالة التطبيق في المتصفح سليمة دائماً بغضّ النظر عن نجاح
+// أو فشل الحفظ الدائم.
+function buildSavePayload(opts){
+  const{capSessions=30,capMsgs=Infinity,capArt=8,capContent=80000,dropArt=false}=opts||{};
+  const slim=sessions.slice(0,capSessions).map(s=>({
+    id:s.id,title:s.title,
+    artifacts:dropArt?[]:(s.artifacts||[]).slice(-capArt).map(a=>({...a,content:(a.content||'').slice(0,capContent)})),
+    messages:(Number.isFinite(capMsgs)?(s.messages||[]).slice(-capMsgs):(s.messages||[])).map(m=>{
+      let c=m.content;
+      if(Array.isArray(c))c=c.filter(p=>p.type==='text').map(p=>p.text).join('\n')+'\n[صورة مرفقة - لا تُحفظ]';
+      if(typeof c==='string'&&c.length>8000)c=c.slice(0,8000)+'\n…[مقتطع]';
+      return{role:m.role,content:c,tool_calls:m.tool_calls,tool_call_id:m.tool_call_id,_files:m._files};
+    })}));
+  return{cfg,sessions:slim};
+}
 function persist(){
-  const trySave=()=>{localStorage.setItem(LS,JSON.stringify({cfg,sessions:slimSessions()}));return true;};
-  // مستوى 1: حفظ عادي
-  try{trySave();return;}catch(e){}
-  // مستوى 2: تقليص معتدل (٨ محادثات، ١٦ رسالة لكل واحدة)
-  try{
-    sessions=sessions.slice(0,8);
-    sessions.forEach(s=>{s.messages=(s.messages||[]).slice(-16);s.artifacts=(s.artifacts||[]).slice(-3);});
-    trySave();renderSessions();return;
-  }catch(e){}
-  // مستوى 3: تقليص قاسٍ (محادثتان فقط، بلا Artifacts محفوظة)
-  try{
-    sessions=sessions.slice(0,2);
-    sessions.forEach(s=>{s.messages=(s.messages||[]).slice(-6);s.artifacts=[];});
-    trySave();renderSessions();return;
-  }catch(e){}
-  // مستوى 4 (الأخير): امسح كل شيء وابدأ تخزيناً فارغاً — هذا المستوى مُغلَّف
-  // بالكامل بمعالجة أخطاء صامتة حتى لا يصل أي استثناء "خام" إلى المستخدم
-  // مهما كان سبب الفشل (حصة ممتلئة كلياً، وضع تصفح خاص يمنع التخزين...).
-  try{
-    localStorage.removeItem(LS);
-    sessions=cur()?[cur()]:sessions.slice(0,1);
-    trySave();renderSessions();
-  }catch(e){
-    console.warn('تعذّر حفظ البيانات محلياً حتى بعد أقصى تقليص ممكن — سيستمر التطبيق بالعمل دون حفظ دائم لهذه الجلسة.',e);
+  const attempts=[
+    {},                                              // مستوى 1: حفظ كامل تقريباً (كما كان slimSessions الافتراضي)
+    {capSessions:8,capMsgs:16,capArt:3},              // مستوى 2: تقليص معتدل للحفظ فقط
+    {capSessions:2,capMsgs:6,capArt:0,dropArt:true},  // مستوى 3: تقليص قاسٍ للحفظ فقط
+    {capSessions:1,capMsgs:4,capArt:0,dropArt:true},  // مستوى 4: أقصى تقليص للحفظ فقط
+  ];
+  for(const opts of attempts){
+    try{
+      localStorage.setItem(LS,JSON.stringify(buildSavePayload(opts)));
+      return; // نجح الحفظ — الحالة الحيّة sessions لم تُمسّ إطلاقاً في كل الحالات
+    }catch(e){}
   }
+  // فشلت كل المحاولات حتى بعد أقصى تقليص (مثلاً وضع تصفح خاص يمنع أي تخزين) —
+  // لا داعي لأي إجراء إضافي على sessions الحيّة؛ التطبيق يستمر بالعمل طبيعياً
+  // لهذه الجلسة فقط دون حفظ دائم عبر عمليات إعادة تحميل الصفحة.
+  try{localStorage.removeItem(LS);}catch(e){}
+  console.warn('تعذّر حفظ البيانات محلياً حتى بعد أقصى تقليص ممكن — سيستمر التطبيق بالعمل دون حفظ دائم لهذه الجلسة، لكن حالتك الحالية داخل المتصفح تبقى سليمة بالكامل.');
 }
 
 /* ============ 2) التشخيص ============ */
@@ -771,7 +790,18 @@ function loadAll(){
   cfg.composio=cfg.composio||{};cfg.zep=cfg.zep||{enabled:false,key:''};
   cfg.composioUserId=cfg.composioUserId||('u_'+Date.now().toString(36)+Math.random().toString(36).slice(2,8));
   cfg.enabledToolNames=cfg.enabledToolNames||[];
-  cfg.backend=cfg.backend||{url:'https://ayb-bh92-tools.hf.space',authType:'none',authKey:'',list:null,execV2:null};
+  cfg.backend=cfg.backend||{url:'https://ayb-bh92-mcp.hf.space',authType:'none',authKey:'',list:null,execV2:null};
+  // ★ ترحيل تلقائي لرابط MCP: المتصفحات التي سبق أن حفظت الرابط القديم في
+  // localStorage تُبقي عليه عند كل تحميل (لأنه يُقرأ من التخزين ويُطغى على
+  // القيمة الافتراضية أعلاه) — هذا هو سبب عدم ظهور الرابط الجديد في الواجهة
+  // رغم تعديل القيمة الافتراضية في الكود. الإصلاح: إن كانت القيمة المحفوظة
+  // هي الرابط القديم بالضبط (أي المستخدم لم يُخصّصه يدوياً برابط آخر)، نستبدله
+  // تلقائياً بالجديد، ونُعيد ضبط عُقد الاكتشاف (list/execV2) لأنها خاصة
+  // بالخادم القديم ولن تصلح مع الخادم الجديد.
+  if(cfg.backend.url==='https://ayb-bh92-tools.hf.space'){
+    cfg.backend.url='https://ayb-bh92-mcp.hf.space';
+    cfg.backend.list=null;cfg.backend.execV2=null;
+  }
   // ★ إبطال أي ذاكرة مؤقتة قديمة كانت تخزّن نمط استدعاء خاطئ (args بدل arguments)
   // من جلسات سابقة قبل هذا الإصلاح — نحذفها صراحةً حتى لا تتعارض مع أي كود قديم.
   if('exec' in cfg.backend)delete cfg.backend.exec;
@@ -826,19 +856,34 @@ function cpResume(){cpFollow=true;$('cpScroll').scrollTop=$('cpScroll').scrollHe
 
 /* ============ 11) Markdown + Artifacts ============ */
 function md(s,sess){
-  let h=esc(s);
-  h=h.replace(/```(\w*)\n?([\s\S]*?)```/g,(_,lang,code)=>{
-    lang=(lang||'text').toLowerCase();
-    if(sess&&(lang==='html'||lang==='svg'||code.length>500)){
+  // ★ إصلاح جوهري: كان يُطبَّق esc() على النص كاملاً أولاً، ثم تُستخرج كتلة
+  // الكود من النص المُهرَّب — فيُخزَّن داخل sess.artifacts نص "مُهرَّب مرتين"
+  // (&lt;div&gt; بدل <div>). هذا كان يُفسد عرض الكود في نافذة الأكواد
+  // (textContent يعرض الرموز الحرفية &lt; &gt; بدل < >) والمعاينة الحية داخل
+  // iframe (srcdoc لا يُعيد تفسير النص كعناصر HTML فعلية بل كنص عادي).
+  // الإصلاح: نستخرج كتل الكود من النص الخام أولاً ونستبدلها بعناصر نائبة
+  // (لا تحتوي أحرفاً خاصة فتمر عبر esc() سليمة)، ثم نُهرِّب باقي النص العادي،
+  // ثم نستبدل العناصر النائبة بالمخرجات النهائية — مع تخزين الكود الخام غير
+  // المُهرَّب في الـ Artifact، وتهريبه فقط عند عرضه كنص عادي داخل الدردشة.
+  const codeBlocks=[];
+  const withPlaceholders=s.replace(/```(\w*)\n?([\s\S]*?)```/g,(_,lang,code)=>{
+    const i=codeBlocks.length;
+    codeBlocks.push({lang:(lang||'text').toLowerCase(),code});
+    return`\u0000CB${i}\u0000`;
+  });
+  let h=esc(withPlaceholders);
+  h=h.replace(/\u0000CB(\d+)\u0000/g,(_,i)=>{
+    const{lang,code}=codeBlocks[+i];
+    if(sess&&qualifiesArtifact(lang,code.length)){
       const id='a'+hash(code);
       let a=sess.artifacts.find(x=>x.id===id);
-      if(!a){a={id,lang,content:code,title:lang==='html'?'index.html':(lang==='svg'?'image.svg':'file.'+lang)};sess.artifacts.push(a);}
+      if(!a){a={id,kind:'code',lang,content:code,title:lang==='html'?'index.html':(lang==='svg'?'image.svg':'file.'+lang)};sess.artifacts.push(a);}
       return`<button class="artifact" onclick="openArtifact('${id}')"><span class="aic">📄</span>
         <span class="at"><b>${esc(a.title)}</b>
         <small>${lang.toUpperCase()} · ${code.length} حرف · اضغط للعرض</small></span></button>`;}
     return`<div class="codewrap"><div class="chead"><span>${esc(lang)}</span>
       <button onclick="navigator.clipboard.writeText(this.closest('.codewrap').querySelector('pre').textContent);toast('📋 تم النسخ')">📋 نسخ</button></div>
-      <pre>${code}</pre></div>`;});
+      <pre>${esc(code)}</pre></div>`;});
   h=h.replace(/`([^`\n]+)`/g,'<code class="inline">$1</code>');
   h=h.replace(/^### (.*)$/gm,'<h3>$1</h3>').replace(/^## (.*)$/gm,'<h2>$1</h2>').replace(/^# (.*)$/gm,'<h1>$1</h1>');
   h=h.replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>');
@@ -901,7 +946,16 @@ async function regenFrom(idx){
 }
 
 /* ============ 12) Code Panel + كتابة حية + معاينة محسّنة ============ */
-const live={timer:null,lastPrev:0,code:'',lang:'html',prevable:false,active:false};
+const live={timer:null,lastPrev:0,code:'',lang:'html',prevable:false,active:false,userClosed:false};
+// ★ الحد الأدنى لطول كتلة الكود (بالأحرف) كي تُعامل كـ Artifact حقيقي يُفتح
+// تلقائياً في اللوحة الجانبية. يُستخدم هذا الشرط نفسه في مكانين: أثناء
+// الكتابة الحية (streamChat) وفي التصيير النهائي (md) — كانا سابقاً بمعيارين
+// مختلفين (الكتابة الحية تفتح اللوحة لأي كود مهما كان قصيراً، بينما md لا
+// يُنشئ Artifact إلا لكود HTML/SVG أو أطول من 500 حرف)، وهذا التضارب هو
+// بالضبط سبب ظهور الكود أحياناً في اللوحة أثناء الكتابة ثم انتهائه كنص عادي
+// داخل فقاعة الدردشة (بلا Artifact) بعد اكتمال الرد.
+const ARTIFACT_MIN_LEN=150;
+function qualifiesArtifact(lang,len){return lang==='html'||lang==='svg'||len>=ARTIFACT_MIN_LEN;}
 function isPreviewable(l){return l==='html'||l==='svg';}
 function wrapPreviewHTML(code,lang){
   const errScript=`<script>(function(){
@@ -920,14 +974,29 @@ function wrapPreviewHTML(code,lang){
 function showPrevError(msg){const b=$('prevErrBar');b.textContent='⚠ '+msg+'  (اضغط للإخفاء)';b.style.display='block';}
 function hidePrevError(){const b=$('prevErrBar');b.style.display='none';b.textContent='';}
 window.addEventListener('message',e=>{if(e.data&&e.data.__previewError)showPrevError(e.data.message);});
+// ★ iframe العرض يُستخدم بطريقتين متعارضتين: srcdoc (لعرض HTML/SVG مُولَّد
+// محلياً) أو src (لعرض ملف خارجي حقيقي كـ PDF/صورة عبر رابطه). إن بقي
+// الخاصيتان معاً، يتغلّب src ويتجاهل المتصفح srcdoc بصمت. هاتان الدالتان
+// تضمنان مسح الأخرى دائماً عند التبديل بينهما.
+function setPreviewDoc(html){$('cpFrame').removeAttribute('src');$('cpFrame').srcdoc=html;}
+function setPreviewUrl(url){$('cpFrame').removeAttribute('srcdoc');$('cpFrame').src=url;}
 function reloadPreview(){
   hidePrevError();
+  if(curArtifact&&curArtifact.kind==='file'){
+    if(curArtifact.embeddable)setPreviewUrl(curArtifact.fileUrl);
+    else toast('لا تتوفر معاينة داخلية لهذا النوع — استخدم ⬈ للفتح في تبويب جديد');
+    return;
+  }
   const code=curArtifact?curArtifact.content:live.code;
   const lang=curArtifact?curArtifact.lang:(live.lang||'html');
-  if(code)$('cpFrame').srcdoc=wrapPreviewHTML(code,lang);
+  if(code)setPreviewDoc(wrapPreviewHTML(code,lang));
   else toast('لا يوجد محتوى للمعاينة');
 }
 function openPreviewNewTab(){
+  if(curArtifact&&curArtifact.kind==='file'){
+    if(!curArtifact.fileUrl)return toast('لا يوجد رابط لهذا الملف');
+    window.open(curArtifact.fileUrl,'_blank');return;
+  }
   const code=curArtifact?curArtifact.content:live.code;
   if(!code)return toast('لا يوجد محتوى للمعاينة');
   const lang=curArtifact?curArtifact.lang:(live.lang||'html');
@@ -939,25 +1008,34 @@ function liveWrite(lang,code){
   const starting=!live.active;
   live.active=true;liveActive=true;live.code=code;live.lang=lang;live.prevable=prevable;
   if(starting){
+    // ★ بداية كتلة كود جديدة فعلياً — سياق جديد، فنُعيد ضبط "أُغلقت يدوياً"
+    // حتى يُسمح بالفتح التلقائي من جديد لهذه الكتلة.
+    live.userClosed=false;
     codePanel.classList.add('open');cpFollow=true;
     setView(prevable?'split':'code');
     live.lastPrev=0;hidePrevError();
-    if(prevable)$('cpFrame').srcdoc=wrapPreviewHTML(code||'','html');
+    if(prevable)setPreviewDoc(wrapPreviewHTML(code||'','html'));
   }
   curArtifact=null;
   $('cpTitle').textContent='✍️ يكتب الكود ('+lang+')...';
   $('cpCode').textContent=code;
   if(cpFollow){const el=$('cpScroll');el.scrollTop=el.scrollHeight;}
+  // ★ الإصلاح الجوهري لمشكلة "تفتح بالإجبار ولا تُغلق": إن أغلق المستخدم
+  // اللوحة يدوياً أثناء بث نفس الكتلة، لا نُعيد فتحها ولا نُحدّث المعاينة مع
+  // كل حرف جديد يصل من النموذج. cpCode/cpTitle تبقى محدَّثة بصمت في الخلفية
+  // (بلا أي أثر بصري لأن العرض مغلق) بحيث تظهر صحيحة فوراً إن أعاد المستخدم
+  // فتح اللوحة يدوياً لاحقاً.
+  if(live.userClosed)return;
   if(prevable){
-    const push=()=>{live.lastPrev=Date.now();hidePrevError();$('cpFrame').srcdoc=wrapPreviewHTML(live.code,lang);};
+    const push=()=>{live.lastPrev=Date.now();hidePrevError();setPreviewDoc(wrapPreviewHTML(live.code,lang));};
     clearTimeout(live.timer);
     if(Date.now()-live.lastPrev>700)push();else live.timer=setTimeout(push,700);
   }
 }
 function liveEnd(){
   clearTimeout(live.timer);
-  if(live.active&&live.prevable&&live.code){hidePrevError();$('cpFrame').srcdoc=wrapPreviewHTML(live.code,live.lang);}
-  live.active=false;liveActive=false;$('cpFollowBtn').style.display='none';
+  if(live.active&&live.prevable&&live.code){hidePrevError();setPreviewDoc(wrapPreviewHTML(live.code,live.lang));}
+  live.active=false;liveActive=false;live.userClosed=false;$('cpFollowBtn').style.display='none';
 }
 function parseLive(full){
   const parts=full.split('```');
@@ -967,22 +1045,79 @@ function parseLive(full){
     return{inside:true,lang:(seg.slice(0,nl).trim()||'text').toLowerCase(),code:seg.slice(nl+1)};}
   return{inside:false};
 }
+// ★ إصلاح جوهري: كانت هناك آليتان منفصلتان لعرض "الملفات" في الدردشة —
+// بطاقات الكود (openArtifact عبر اللوحة) وبطاقات ملفات الأدوات (كانت
+// <a href> عادية تفتح في المتصفح مباشرة، متجاوزة اللوحة كلياً). كلتاهما
+// تستخدمان نفس صنف CSS ".artifact" فتبدوان متطابقتين بصرياً لكن تتصرفان
+// بشكل مختلف تماماً — وهذا بالضبط ما كان يجعل "الارتيفاكت" و"نافذة الأكواد"
+// ليسا نفس الشيء من منظور المستخدم. الآن كل شيء (كود أو ملف) هو Artifact
+// حقيقي مُسجَّل في sess.artifacts ويُفتح دائماً عبر openArtifact() في نفس
+// اللوحة، والدالة تفرّع داخلياً حسب a.kind.
 function openArtifact(id){
-  const a=cur()?.artifacts.find(x=>x.id===id);if(!a)return;
+  const a=cur()?.artifacts.find(x=>x.id===id);
+  if(!a){toast('❌ تعذّر العثور على هذا العنصر (ربما حُذف أو لم يعد محفوظاً)');return;}
   liveEnd();curArtifact=a;hidePrevError();
   $('cpTitle').textContent=a.title;
+  if(a.kind==='file'){
+    $('cpCode').textContent=
+      `📁 ${a.title}\n\nالنوع: ${a.fileType||'غير معروف'}\nالأداة: ${a.toolName||'—'}\nالرابط: ${a.fileUrl}\n\n`+
+      (a.embeddable?'تُعرض معاينة الملف في اللوحة المقابلة.':'لا تتوفر معاينة داخلية لهذا النوع من الملفات — استخدم زر ⬈ لفتحه في تبويب جديد، أو ⬇ لتنزيله.');
+    if(a.embeddable){setPreviewUrl(a.fileUrl);setView('split');}
+    else{setPreviewDoc('<body style="font-family:sans-serif;color:#888;display:flex;align-items:center;justify-content:center;height:100vh;text-align:center;padding:20px">لا توجد معاينة داخلية لهذا النوع من الملفات.<br>استخدم ⬈ لفتحه في تبويب جديد.</body>');setView('code');}
+    codePanel.classList.add('open');
+    return;
+  }
   $('cpCode').textContent=a.content;
   const prev=isPreviewable(a.lang);
-  $('cpFrame').srcdoc=prev?wrapPreviewHTML(a.content,a.lang):'<body style="font-family:sans-serif;color:#888;display:flex;align-items:center;justify-content:center;height:100vh">لا توجد معاينة لهذا النوع</body>';
+  if(prev)setPreviewDoc(wrapPreviewHTML(a.content,a.lang));
+  else setPreviewDoc('<body style="font-family:sans-serif;color:#888;display:flex;align-items:center;justify-content:center;height:100vh">لا توجد معاينة لهذا النوع</body>');
   setView(prev?'split':'code');codePanel.classList.add('open');
 }
 function setView(v){codePanel.dataset.view=v;document.querySelectorAll('.cp-tabs button').forEach(b=>b.classList.toggle('on',b.dataset.v===v));}
-function closePanel(){codePanel.classList.remove('open','full');liveEnd();}
-function dlArtifact(){if(!curArtifact)return;
-  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([curArtifact.content]));a.download=curArtifact.title;a.click();toast('⬇ تم التنزيل');}
-// ★ يعرض أي ملف تُرجعه نتيجة أداة (file_url من create_docx/create_pdf/
-// create_xlsx/fetch_media_to_file...) كبطاقة تحميل مرئية في الدردشة، بدل أن
-// يبقى مدفوناً كنص JSON خام لا يراه المستخدم إلا إذا قرأه النموذج له يدوياً.
+function closePanel(){
+  codePanel.classList.remove('open','full');
+  // ★ إصلاح جذري لمشكلة "تنبثق بالإجبار ولا تُغلق": الكود القديم كان يستدعي
+  // liveEnd() هنا، وهي تُصفّر live.active إلى false. لكن البث لا يزال جارياً
+  // (نفس كتلة الكود لم تنتهِ بعد)، فحين تصل الدفعة (chunk) التالية من الحروف
+  // من النموذج، تستدعي liveWrite() من جديد وترى live.active=false فتظن أن
+  // كتلة كود "بدأت للتو" وتُعيد فتح اللوحة تلقائياً فوراً — أي أن أي إغلاق
+  // يدوي أثناء الكتابة الحية كان يُلغى خلال أجزاء من الثانية.
+  // الإصلاح: لا نُنهي التتبع الحي هنا؛ فقط نُسجّل أن المستخدم أغلق اللوحة
+  // يدوياً (live.userClosed) لكي تحترم liveWrite هذه الرغبة ولا تُعيد فتح
+  // اللوحة أو تدفع تحديثات معاينة لبقية هذه الكتلة/الرسالة، مع إيقاف أي
+  // مؤقّت معاينة مُجدوَل سلفاً.
+  if(live.active)live.userClosed=true;
+  clearTimeout(live.timer);
+}
+function dlArtifact(){
+  if(!curArtifact)return;
+  if(curArtifact.kind==='file'){
+    if(!curArtifact.fileUrl)return toast('لا يوجد رابط لهذا الملف');
+    const a=document.createElement('a');a.href=curArtifact.fileUrl;a.download=curArtifact.title;a.target='_blank';a.rel='noopener';a.click();
+    toast('⬇ يفتح رابط الملف...');return;
+  }
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([curArtifact.content]));a.download=curArtifact.title;a.click();toast('⬇ تم التنزيل');
+}
+// ★ زر نسخ الكود في نافذة الأكواد: يعمل مع Artifact مفتوح (كود) أو أثناء
+// الكتابة الحية قبل اكتمال الرد (live.code)، ويعتمد على نفس النص المعروض
+// فعلياً في cpCode حتى يبقى متطابقاً دائماً مع ما يراه المستخدم.
+async function copyArtifactCode(){
+  if(curArtifact&&curArtifact.kind==='file'){
+    if(!curArtifact.fileUrl)return toast('لا يوجد شيء لنسخه');
+    try{await navigator.clipboard.writeText(curArtifact.fileUrl);toast('📋 تم نسخ رابط الملف');}
+    catch(e){toast('❌ تعذّر النسخ: '+e.message);}
+    return;
+  }
+  const code=curArtifact?curArtifact.content:live.code;
+  if(!code)return toast('لا يوجد كود لنسخه');
+  try{await navigator.clipboard.writeText(code);toast('📋 تم نسخ الكود');}
+  catch(e){toast('❌ تعذّر النسخ: '+e.message);}
+}
+// ★ يسجّل أي ملف تُرجعه نتيجة أداة (file_url من create_docx/create_pdf/
+// create_xlsx/fetch_media_to_file...) كـ Artifact حقيقي في sess.artifacts —
+// تماماً مثل كتل الكود — بدل بطاقة <a href> منفصلة كانت تفتح/تُنزّل الملف
+// مباشرة من المتصفح متجاوزةً نافذة الأكواد كلياً. الآن يمر كلاهما عبر نفس
+// المسار (openArtifact) ونفس النافذة.
 function addFileArtifactIfAny(resultContent,toolName){
   let parsed;try{parsed=JSON.parse(resultContent);}catch(e){return;}
   const r=parsed?.result||parsed;
@@ -990,12 +1125,18 @@ function addFileArtifactIfAny(resultContent,toolName){
   if(!fileUrl||typeof fileUrl!=='string')return;
   const name=fileUrl.split('/').pop();
   const full=fileUrl.startsWith('http')?fileUrl:Backend.url()+fileUrl;
+  const ext=(name.split('.').pop()||'').toLowerCase();
+  const embeddable=['pdf','png','jpg','jpeg','gif','webp','svg'].includes(ext);
+  const sess=cur();
+  const id='f'+hash(full+name);
+  if(sess){
+    let a=sess.artifacts.find(x=>x.id===id);
+    if(!a){a={id,kind:'file',fileUrl:full,fileType:ext.toUpperCase()||'ملف',toolName,title:name,embeddable};sess.artifacts.push(a);}
+  }
   const w=$('chatInner');
   const d=document.createElement('div');d.className='msg bot';
-  d.innerHTML=`<a href="${full}" target="_blank" class="artifact" style="text-decoration:none">
-    <span class="aic">📁</span>
-    <span class="at"><b>${esc(name)}</b><small>${esc(toolName)} · اضغط لفتح/تحميل الملف</small></span>
-  </a>`;
+  d.innerHTML=`<button class="artifact" onclick="openArtifact('${id}')"><span class="aic">📁</span>
+    <span class="at"><b>${esc(name)}</b><small>${esc(toolName)} · اضغط للفتح في نافذة الأكواد</small></span></button>`;
   w.appendChild(d);scrollBottom(true);
 }
 
@@ -1118,6 +1259,7 @@ async function sendMsg(){
 }
 async function runAgent(s,userText){
   setBusy(true);abortCtl=new AbortController();chatFollow=true;
+  live.userClosed=false; // ★ بداية نظيفة لكل جولة رد جديدة من الوكيل
   const box=newAgentBox();
   let zepCtx='';
   if(cfg.zep.enabled&&cfg.zep.key){
@@ -1277,7 +1419,7 @@ async function streamChat(body,box){
       full+=chunk;
       if(!div){box.set('يكتب الرد...','');div=addBubble('bot','');}
       const p=parseLive(full);
-      if(p.inside){
+      if(p.inside&&qualifiesArtifact(p.lang,p.code.length)){
         wasLive=true;
         box.set('يكتب الكود...',p.lang+' · '+p.code.length+' حرف');
         liveWrite(p.lang,p.code);
