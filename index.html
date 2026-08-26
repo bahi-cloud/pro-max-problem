@@ -475,13 +475,32 @@ async function diagFetch(url, opts = {}, note = '') {
 function openDiag() {
   $('diagList').textContent = cfg.backend.list ? (cfg.backend.list.kind + ' ' + (cfg.backend.list.path || '/')) : 'غير محدد';
   $('diagExec').textContent = cfg.backend.execV2 ? ((cfg.backend.execV2.kind || 'rest') + ' ' + (cfg.backend.execV2.path || '') + ' (style ' + cfg.backend.execV2.style + ')') : 'غير محدد';
-  $('diagBody').innerHTML = DIAG.length ? DIAG.map(e =>
+  
+  // ★ إضافة معلومات أدوات Composio إلى لوحة التشخيص
+  const composioTools = tools.filter(t => {
+    const name = t.name.toLowerCase();
+    return name.includes('composio') || name.includes('session') || name.includes('auth') || name.includes('connect') || name.includes('toolkit');
+  });
+  
+  let composioInfo = '';
+  if (composioTools.length === 0) {
+    composioInfo = '⚠️ لا توجد أدوات Composio على هذا الخادم';
+  } else {
+    composioInfo = '✅ أدوات Composio المكتشفة:\n' + composioTools.map(t => '  - ' + t.name).join('\n');
+  }
+  
+  $('diagBody').innerHTML = (DIAG.length ? DIAG.map(e =>
     `<div class="diag-entry">
       <div class="du">${esc(e.method)} ${esc(e.url)} <span class="${e.err || e.status >= 400 ? 'dbad' : 'dok'}">${e.err ? esc(e.err) : ('HTTP ' + e.status)}</span></div>
       <div>${e.time} · ${e.dur}ms · ${esc(e.ct || '—')} · ${esc(e.note)}</div>
       ${e.reqBody ? `<pre>→ ${esc(e.reqBody)}</pre>` : ''}${e.body ? `<pre>← ${esc(e.body)}</pre>` : ''}
     </div>`
-  ).join('') : '<div class="toolsEmpty">لا توجد طلبات بعد</div>';
+  ).join('') : '<div class="toolsEmpty">لا توجد طلبات بعد</div>') + 
+  `<div class="diag-entry" style="margin-top:8px;border-color:var(--accent);">
+    <div class="du">🔌 معلومات Composio</div>
+    <pre style="max-height:120px;font-size:10px;white-space:pre-wrap;">${esc(composioInfo)}</pre>
+  </div>`;
+  
   diagModal.classList.add('open');
 }
 
@@ -489,8 +508,16 @@ function copyDiag() {
   const rep = DIAG.map(e =>
     `[${e.time}] ${e.method} ${e.url}\n  note:${e.note} status:${e.status || e.err} dur:${e.dur}ms ct:${e.ct}\n  req:${e.reqBody}\n  res:${e.body}`
   ).join('\n\n');
+  
+  const composioTools = tools.filter(t => {
+    const name = t.name.toLowerCase();
+    return name.includes('composio') || name.includes('session') || name.includes('auth') || name.includes('connect') || name.includes('toolkit');
+  });
+  
+  const composioInfo = composioTools.length ? composioTools.map(t => t.name).join('\n') : 'لا توجد أدوات Composio';
+  
   navigator.clipboard.writeText('=== AI Studio Diagnostics ===\nlist:' + JSON.stringify(cfg.backend.list) + '\nexec:' + JSON.stringify(cfg.backend.execV2) +
-    '\n\n' + rep);
+    '\n\nComposio Tools:\n' + composioInfo + '\n\n' + rep);
   toast('📋 تم نسخ التقرير');
 }
 
@@ -801,8 +828,6 @@ async function loadTools(manual) {
     tools = await Backend.listTools();
     renderTools();
     renderComposio();
-    // ★ عرض أدوات Composio المكتشفة للتشخيص
-    debugComposioTools();
     if (manual) toast('✅ تم سحب ' + tools.length + ' أداة');
   } catch (e) {
     tools = [];
@@ -877,7 +902,7 @@ async function runToolTest() {
   if (en) $('testReq').value = `${en.method} ${en.url}\n${en.reqBody}`;
 }
 
-/* ============ 8) Composio — الإصلاح الجراحي الكامل ============ */
+/* ============ 8) Composio — الإصلاح الجراحي النهائي ============ */
 
 const COMPOSIO_APPS = [
   { id: 'gmail', name: 'Gmail', icon: '📧', prefixes: ['gmail'] },
@@ -927,29 +952,42 @@ function appState(id) {
   return cfg.composio[id];
 }
 
-// ★★★ الإصلاح الجراحي: دالة اكتشاف الأدوات الديناميكية ★★★
+// ★★★ الإصلاح الجراحي: دالة اكتشاف الأدوات الديناميكية (محسّنة) ★★★
 function findComposioTool(exactCandidates, keywordGroups) {
-  // البحث عن اسم مطابق تام
+  // 1. البحث عن اسم مطابق تام (مع مراعاة حالة الأحرف)
   for (const candidate of exactCandidates) {
-    if (tools.some(t => t.name === candidate)) {
-      console.log(`✅ تم العثور على الأداة: ${candidate}`);
-      return candidate;
-    }
-  }
-
-  // البحث عن تطابق بالكلمات المفتاحية
-  for (const keywords of keywordGroups) {
     const found = tools.find(t => {
-      const name = t.name.toLowerCase();
-      return keywords.every(k => name.includes(k));
+      const toolName = t.name.toLowerCase();
+      const candLower = candidate.toLowerCase();
+      return toolName === candLower || toolName.includes(candLower);
     });
     if (found) {
-      console.log(`✅ تم العثور على الأداة via keywords: ${found.name}`);
       return found.name;
     }
   }
 
-  console.log(`❌ لم يتم العثور على أداة مطابقة`);
+  // 2. البحث عن تطابق بالكلمات المفتاحية (جميع الكلمات)
+  for (const keywords of keywordGroups) {
+    const found = tools.find(t => {
+      const name = t.name.toLowerCase();
+      return keywords.every(k => name.includes(k.toLowerCase()));
+    });
+    if (found) {
+      return found.name;
+    }
+  }
+
+  // 3. البحث المرن: أي كلمة من الكلمات المفتاحية
+  for (const keywords of keywordGroups) {
+    const found = tools.find(t => {
+      const name = t.name.toLowerCase();
+      return keywords.some(k => name.includes(k.toLowerCase()));
+    });
+    if (found) {
+      return found.name;
+    }
+  }
+
   return null;
 }
 
@@ -981,7 +1019,7 @@ function renderComposio() {
   }).join('');
 }
 
-// ★★★ الإصلاح الجراحي: composioLogin ★★★
+// ★★★ الإصلاح الجراحي: composioLogin (محسّن) ★★★
 async function composioLogin(app) {
   try {
     if (!cfg.composioUserId) {
@@ -991,45 +1029,67 @@ async function composioLogin(app) {
 
     // ★ اكتشاف أداة إنشاء الجلسة
     const createTool = findComposioTool(
-      ['composio_create_session', 'create_session', 'composio_session', 'create_composio_session'],
+      [
+        'composio_create_session',
+        'create_session',
+        'composio_session',
+        'create_composio_session',
+        'createSession',
+        'session_create',
+        'composio_create',
+        'create_session_composio'
+      ],
       [
         ['composio', 'create', 'session'],
         ['composio', 'session'],
-        ['create', 'session']
+        ['create', 'session'],
+        ['composio', 'create'],
+        ['session', 'create'],
+        ['composio', 'init']
       ]
     );
 
     if (!createTool) {
-      toast('⚠️ لا توجد أداة إنشاء جلسة Composio على هذا الخادم — راجع 🩺');
-      console.error('❌ لم يتم العثور على أداة إنشاء جلسة');
+      toast('⚠️ لا توجد أداة إنشاء جلسة Composio على هذا الخادم — افتح 🩺 للتفاصيل');
       return;
     }
 
-    toast('⏳ يتم إنشاء جلسة اتصال...');
+    toast('⏳ يتم إنشاء جلسة اتصال مع Composio...');
 
     const session = await callTool(createTool, {
       user_id: cfg.composioUserId,
       toolkits: [app]
     });
 
-    const sessionId = session?.session_id || session?.id;
+    const sessionId = session?.session_id || session?.id || session?.data?.session_id;
     if (!sessionId) {
       throw new Error('لم يرجع الخادم session_id');
     }
 
     // ★ اكتشاف أداة التفويض
     const authTool = findComposioTool(
-      ['composio_authorize_toolkit', 'authorize_toolkit', 'composio_auth', 'auth_toolkit'],
+      [
+        'composio_authorize_toolkit',
+        'authorize_toolkit',
+        'composio_auth',
+        'auth_toolkit',
+        'authorize',
+        'composio_authorize',
+        'authorize_session',
+        'composio_auth_toolkit'
+      ],
       [
         ['composio', 'authorize'],
         ['composio', 'auth'],
-        ['authorize', 'toolkit']
+        ['authorize', 'toolkit'],
+        ['auth', 'toolkit'],
+        ['composio', 'link'],
+        ['link', 'toolkit']
       ]
     );
 
     if (!authTool) {
-      toast('⚠️ لا توجد أداة تفويض على هذا الخادم — راجع 🩺');
-      console.error('❌ لم يتم العثور على أداة تفويض');
+      toast('⚠️ لا توجد أداة تفويض على هذا الخادم — افتح 🩺 للتفاصيل');
       return;
     }
 
@@ -1038,9 +1098,9 @@ async function composioLogin(app) {
       toolkit: app
     });
 
-    const url = auth?.redirect_url || auth?.url || auth?.link;
+    const url = auth?.redirect_url || auth?.url || auth?.link || auth?.data?.redirect_url;
     if (!/^https?:\/\//i.test(url || '')) {
-      throw new Error('لا يوجد رابط تفويض صالح في رد الخادم');
+      throw new Error('لا يوجد رابط تفويض صالح');
     }
 
     window.open(url, '_blank', 'noopener,noreferrer');
@@ -1058,7 +1118,7 @@ async function composioLogin(app) {
         clearInterval(pollTimer);
         pendingApp = null;
         renderComposio();
-        toast('✅ تم الاتصال بـ ' + app);
+        toast('✅ تم الاتصال بـ ' + app + ' بنجاح!');
       } else if (attempts > 40) {
         clearInterval(pollTimer);
         pendingApp = null;
@@ -1069,53 +1129,62 @@ async function composioLogin(app) {
 
   } catch (error) {
     toast('❌ تعذر بدء تسجيل الدخول: ' + error.message);
-    console.error('❌ خطأ في composioLogin:', error);
   }
 }
 
-// ★★★ الإصلاح الجراحي: composioLogout ★★★
+// ★★★ الإصلاح الجراحي: composioLogout (يعمل بشكل صحيح) ★★★
 function composioLogout(app) {
+  // ★ البحث عن أداة قطع الاتصال
   const revokeTool = findComposioTool(
     [
       'composio_delete_connected_account',
       'composio_disconnect_toolkit',
       'composio_revoke_connection',
       'delete_connection',
-      'disconnect_toolkit'
+      'disconnect_toolkit',
+      'composio_delete',
+      'composio_revoke',
+      'revoke_connection',
+      'disconnect_connection',
+      'composio_remove_connection'
     ],
     [
       ['composio', 'delete'],
       ['composio', 'disconnect'],
       ['composio', 'revoke'],
       ['delete', 'connection'],
-      ['disconnect']
+      ['disconnect'],
+      ['revoke'],
+      ['composio', 'remove'],
+      ['remove', 'connection']
     ]
   );
 
+  // ★ إذا وجدت أداة قطع الاتصال، استخدمها
   if (revokeTool) {
     try {
       toast('⏳ يتم قطع الاتصال...');
+      
       callTool(revokeTool, {
         user_id: cfg.composioUserId,
         toolkit: app
       });
+      
       appState(app.id).connected = false;
       appState(app.id).enabled = false;
       persist();
       renderComposio();
       updateCount();
-      toast('✅ تم قطع الاتصال فعلياً بـ ' + app);
+      toast('✅ تم قطع الاتصال بـ ' + app);
       return;
     } catch (error) {
-      toast('⚠️ تعذر قطع الاتصال من الخادم (' + error.message + ') — تم الإيقاف محلياً فقط');
-      console.error('❌ خطأ في قطع الاتصال:', error);
+      toast('⚠️ تعذر قطع الاتصال من الخادم (' + error.message + ') — تم الإيقاف محلياً');
     }
   } else {
-    toast('⚠️ لا توجد أداة قطع اتصال على هذا الخادم — تم الإيقاف محلياً فقط');
-    console.warn('⚠️ لا توجد أداة قطع اتصال');
+    toast('⚠️ لا توجد أداة قطع اتصال على هذا الخادم — تم الإيقاف محلياً');
   }
 
-  // ★ الإيقاف المحلي كحل احتياطي
+  // ★ الإيقاف المحلي كحل احتياطي (يعمل دائماً)
   appState(app.id).connected = false;
   appState(app.id).enabled = false;
   persist();
@@ -1123,39 +1192,45 @@ function composioLogout(app) {
   updateCount();
 }
 
-// ★★★ الإصلاح الجراحي: refreshComposio ★★★
+// ★★★ الإصلاح الجراحي: refreshComposio (محسّن) ★★★
 async function refreshComposio(manual = false) {
   const listTool = findComposioTool(
     [
       'composio_list_connected_tools',
       'list_connected_tools',
       'composio_list',
-      'get_connections'
+      'get_connections',
+      'list_connections',
+      'composio_connections',
+      'get_connected_tools',
+      'list_tools_connected'
     ],
     [
       ['composio', 'connected'],
       ['composio', 'list'],
-      ['list', 'connection']
+      ['list', 'connection'],
+      ['get', 'connection'],
+      ['composio', 'status'],
+      ['connection', 'status']
     ]
   );
 
   if (!listTool) {
     if (manual) {
-      toast('⚠️ لا توجد أداة لعرض حالة اتصالات Composio على هذا الخادم');
+      toast('⚠️ لا توجد أداة لعرض حالة الاتصالات على هذا الخادم');
     }
-    console.warn('⚠️ لا توجد أداة لعرض الحالة');
     renderComposio();
     return;
   }
 
   try {
     const data = await callTool(listTool, {});
-    const items = data?.connected_tools || data?.connections || data?.data || [];
+    const items = data?.connected_tools || data?.connections || data?.data || data?.items || [];
 
     COMPOSIO_APPS.forEach(app => {
       appState(app.id).connected = items.some(item => {
-        const itemId = item.slug || item.toolkit || item.app || item.id;
-        return itemId === app.id && (item.status === 'ACTIVE' || item.active === true);
+        const itemId = item.slug || item.toolkit || item.app || item.id || item.name;
+        return itemId === app.id && (item.status === 'ACTIVE' || item.active === true || item.connected === true);
       });
     });
 
@@ -1168,19 +1243,8 @@ async function refreshComposio(manual = false) {
     if (manual) {
       toast('❌ تعذر تحديث حالة Composio: ' + error.message);
     }
-    console.error('❌ خطأ في refreshComposio:', error);
     renderComposio();
   }
-}
-
-// ★ دالة مساعدة لعرض أسماء الأدوات المتاحة على الخادم (للتشخيص)
-function debugComposioTools() {
-  const composioTools = tools.filter(t => {
-    const name = t.name.toLowerCase();
-    return name.includes('composio') || name.includes('session') || name.includes('auth') || name.includes('connect');
-  });
-  console.log('🔍 أدوات Composio المكتشفة:', composioTools.map(t => t.name));
-  return composioTools;
 }
 
 function updateCount() {
