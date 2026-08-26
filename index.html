@@ -239,6 +239,7 @@ main{flex:1;display:flex;flex-direction:column;min-width:0;position:relative}
               <div class="ph">🧰 أدوات الباك اند <button class="rl" onclick="loadTools(true)">⟳ إعادة السحب</button></div>
               <div id="toolsScroll"><div class="toolsEmpty">جارٍ السحب...</div></div>
               <div class="ph">🔌 تكاملات Composio <button class="rl" onclick="refreshComposio(true)">⟳ تحديث الحالة</button></div>
+              <div style="padding:2px 14px 8px;font-size:10px;color:var(--muted);line-height:1.7">المفتاح ⇠ تفعيل استخدام أدوات الحساب مع النموذج · الزر ⇠ تسجيل الدخول (ربط الحساب) أو تسجيل الخروج (قفل الاتصال فعلياً من الخادم)</div>
               <div id="composioScroll"></div>
             </div>
           </div>
@@ -327,1511 +328,971 @@ main{flex:1;display:flex;flex-direction:column;min-width:0;position:relative}
 </div>
 
 <script>
-"use strict";
-
 /* ============ 1) الحالة + التخزين ============ */
-const LS = 'ai_studio_v7';
-let cfg = {
-  baseUrl: '',
-  apiKey: '',
-  authType: 'bearer',
-  model: '',
-  models: [],
-  sysPrompt: '',
-  temp: '',
-  maxTok: '',
-  topP: '',
-  theme: 'dark',
-  composio: {},
-  zep: { enabled: false, key: '' },
-  chatPath: null,
-  proxyMode: false,
-  enabledToolNames: [],
-  backend: {
-    url: 'https://ayb-bh92-mcp.hf.space',
-    authType: 'none',
-    authKey: '',
-    list: null,
-    execV2: null
-  }
-};
-let sessions = [],
-  curId = null,
-  tools = [],
-  files = [],
-  busy = false,
-  abortCtl = null,
-  curArtifact = null,
-  testTool = null;
-const $ = id => document.getElementById(id);
-const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-function hash(s) { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0; return h.toString(36); }
-
-function extractPlan(content) {
-  const m = content.match(/<plan>([\s\S]*?)<\/plan>/i);
-  if (!m) return { plan: '', rest: content };
-  return { plan: m[1].trim(), rest: (content.slice(0, m.index) + content.slice(m.index + m[0].length)).trim() };
+const LS='ai_studio_v7';
+let cfg={baseUrl:'',apiKey:'',authType:'bearer',model:'',models:[],sysPrompt:'',temp:'',maxTok:'',topP:'',
+  theme:'dark',composio:{},zep:{enabled:false,key:''},chatPath:null,proxyMode:false,enabledToolNames:[],
+  backend:{url:'https://ayb-bh92-mcp.hf.space',authType:'none',authKey:'',list:null,execV2:null}};
+let sessions=[],curId=null,tools=[],files=[],busy=false,abortCtl=null,curArtifact=null,testTool=null;
+const $=id=>document.getElementById(id);
+const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+function hash(s){let h=5381;for(let i=0;i<s.length;i++)h=((h<<5)+h+s.charCodeAt(i))>>>0;return h.toString(36);}
+// ★ يستخرج قسم الخطة/التفكير الذي يكتبه النموذج داخل <plan>...</plan> (بناءً
+// على تعليمة النظام المُضافة في apiMessages) ليُعرض في صندوق التفكير في
+// agent-box بدل ظهوره كنص عادي داخل فقاعة الدردشة المرئية.
+function extractPlan(content){
+  const m=content.match(/<plan>([\s\S]*?)<\/plan>/i);
+  if(!m)return{plan:'',rest:content};
+  return{plan:m[1].trim(),rest:(content.slice(0,m.index)+content.slice(m.index+m[0].length)).trim()};
 }
-
-function toast(t) { const d = document.createElement('div');
-  d.className = 'toast';
-  d.textContent = t;
-  $('toasts').appendChild(d);
-  setTimeout(() => d.remove(), 2800); }
-
-function cur() { return sessions.find(s => s.id === curId); }
-
-function slimSessions() {
-  return sessions.slice(0, 30).map(s => ({
-    id: s.id,
-    title: s.title,
-    artifacts: (s.artifacts || []).slice(-8).map(a => ({ ...a,
-      content: a.content.slice(0, 80000) })),
-    messages: s.messages.map(m => {
-      let c = m.content;
-      if (Array.isArray(c)) c = c.filter(p => p.type === 'text').map(p => p.text).join('\n') + '\n[صورة مرفقة - لا تُحفظ]';
-      if (typeof c === 'string' && c.length > 8000) c = c.slice(0, 8000) + '\n…[مقتطع]';
-      return { role: m.role, content: c, tool_calls: m.tool_calls, tool_call_id: m.tool_call_id, _files: m._files };
-    })
-  }));
+function toast(t){const d=document.createElement('div');d.className='toast';d.textContent=t;$('toasts').appendChild(d);setTimeout(()=>d.remove(),2800);}
+function cur(){return sessions.find(s=>s.id===curId);}
+function slimSessions(){
+  return sessions.slice(0,30).map(s=>({id:s.id,title:s.title,
+    artifacts:(s.artifacts||[]).slice(-8).map(a=>({...a,content:a.content.slice(0,80000)})),
+    messages:s.messages.map(m=>{
+      let c=m.content;
+      if(Array.isArray(c))c=c.filter(p=>p.type==='text').map(p=>p.text).join('\n')+'\n[صورة مرفقة - لا تُحفظ]';
+      if(typeof c==='string'&&c.length>8000)c=c.slice(0,8000)+'\n…[مقتطع]';
+      return{role:m.role,content:c,tool_calls:m.tool_calls,tool_call_id:m.tool_call_id,_files:m._files};})}));
 }
-
-function buildSavePayload(opts) {
-  const { capSessions = 30, capMsgs = Infinity, capArt = 8, capContent = 80000, dropArt = false } = opts || {};
-  const slim = sessions.slice(0, capSessions).map(s => ({
-    id: s.id,
-    title: s.title,
-    artifacts: dropArt ? [] : (s.artifacts || []).slice(-capArt).map(a => ({ ...a,
-      content: (a.content || '').slice(0, capContent) })),
-    messages: (Number.isFinite(capMsgs) ? (s.messages || []).slice(-capMsgs) : (s.messages || [])).map(m => {
-      let c = m.content;
-      if (Array.isArray(c)) c = c.filter(p => p.type === 'text').map(p => p.text).join('\n') + '\n[صورة مرفقة - لا تُحفظ]';
-      if (typeof c === 'string' && c.length > 8000) c = c.slice(0, 8000) + '\n…[مقتطع]';
-      return { role: m.role, content: c, tool_calls: m.tool_calls, tool_call_id: m.tool_call_id, _files: m._files };
-    })
-  }));
-  return { cfg, sessions: slim };
+// ★ إصلاح جذري: كانت مستويات التقليص هنا (عند امتلاء حصة localStorage) تُنفَّذ
+// مباشرة على المصفوفة الحيّة sessions وعناصرها (s.messages/s.artifacts)، عبر
+// أسطر مثل "s.artifacts=(s.artifacts||[]).slice(-3)" أو "s.artifacts=[]".
+// كانت هذه أسطر "تقليص للحفظ فقط" في النية، لكنها فعلياً كانت تُعدّل حالة
+// التطبيق الحيّة نفسها — أي أن أي Artifact زائد عن آخر 3 كان يُحذف فعلياً
+// من الذاكرة (لا فقط من التخزين) بمجرد أن تفشل محاولة الحفظ الأولى بسبب
+// امتلاء الحصة، وهو أمر شائع الحدوث فور إنشاء Artifact كبير لأن persist()
+// تُستدعى مباشرة بعد كل رد. هذا هو السبب الحقيقي لرسالة "تعذر العثور على
+// هذا العنصر" التي كانت تظهر فوراً عند الضغط على الزر رغم أنه ظاهر للتو.
+// الإصلاح: كل مستويات التقليص تُبنى الآن كنسخة (snapshot) منفصلة تُرسَل إلى
+// localStorage فقط، ولا تلمس أبداً المتغيّر الحيّ sessions أو أي كائن جلسة
+// داخله — فتبقى حالة التطبيق في المتصفح سليمة دائماً بغضّ النظر عن نجاح
+// أو فشل الحفظ الدائم.
+function buildSavePayload(opts){
+  const{capSessions=30,capMsgs=Infinity,capArt=8,capContent=80000,dropArt=false}=opts||{};
+  const slim=sessions.slice(0,capSessions).map(s=>({
+    id:s.id,title:s.title,
+    artifacts:dropArt?[]:(s.artifacts||[]).slice(-capArt).map(a=>({...a,content:(a.content||'').slice(0,capContent)})),
+    messages:(Number.isFinite(capMsgs)?(s.messages||[]).slice(-capMsgs):(s.messages||[])).map(m=>{
+      let c=m.content;
+      if(Array.isArray(c))c=c.filter(p=>p.type==='text').map(p=>p.text).join('\n')+'\n[صورة مرفقة - لا تُحفظ]';
+      if(typeof c==='string'&&c.length>8000)c=c.slice(0,8000)+'\n…[مقتطع]';
+      return{role:m.role,content:c,tool_calls:m.tool_calls,tool_call_id:m.tool_call_id,_files:m._files};
+    })}));
+  return{cfg,sessions:slim};
 }
-
-function persist() {
-  const attempts = [
-    {},
-    { capSessions: 8, capMsgs: 16, capArt: 3 },
-    { capSessions: 2, capMsgs: 6, capArt: 0, dropArt: true },
-    { capSessions: 1, capMsgs: 4, capArt: 0, dropArt: true },
+function persist(){
+  const attempts=[
+    {},                                              // مستوى 1: حفظ كامل تقريباً (كما كان slimSessions الافتراضي)
+    {capSessions:8,capMsgs:16,capArt:3},              // مستوى 2: تقليص معتدل للحفظ فقط
+    {capSessions:2,capMsgs:6,capArt:0,dropArt:true},  // مستوى 3: تقليص قاسٍ للحفظ فقط
+    {capSessions:1,capMsgs:4,capArt:0,dropArt:true},  // مستوى 4: أقصى تقليص للحفظ فقط
   ];
-  for (const opts of attempts) {
-    try {
-      localStorage.setItem(LS, JSON.stringify(buildSavePayload(opts)));
-      return;
-    } catch (e) {}
+  for(const opts of attempts){
+    try{
+      localStorage.setItem(LS,JSON.stringify(buildSavePayload(opts)));
+      return; // نجح الحفظ — الحالة الحيّة sessions لم تُمسّ إطلاقاً في كل الحالات
+    }catch(e){}
   }
-  try { localStorage.removeItem(LS); } catch (e) {}
-  console.warn('تعذّر حفظ البيانات محلياً حتى بعد أقصى تقليص ممكن');
+  // فشلت كل المحاولات حتى بعد أقصى تقليص (مثلاً وضع تصفح خاص يمنع أي تخزين) —
+  // لا داعي لأي إجراء إضافي على sessions الحيّة؛ التطبيق يستمر بالعمل طبيعياً
+  // لهذه الجلسة فقط دون حفظ دائم عبر عمليات إعادة تحميل الصفحة.
+  try{localStorage.removeItem(LS);}catch(e){}
+  console.warn('تعذّر حفظ البيانات محلياً حتى بعد أقصى تقليص ممكن — سيستمر التطبيق بالعمل دون حفظ دائم لهذه الجلسة، لكن حالتك الحالية داخل المتصفح تبقى سليمة بالكامل.');
 }
 
 /* ============ 2) التشخيص ============ */
-const DIAG = [];
-
-async function diagFetch(url, opts = {}, note = '') {
-  const t0 = performance.now();
-  const e = {
-    time: new Date().toISOString().slice(11, 19),
-    url,
-    method: opts.method || 'GET',
-    note,
-    reqBody: (typeof opts.body === 'string' ? opts.body.slice(0, 300) : (opts.body ? '[بيانات ثنائية/FormData]' : '')),
-    status: '',
-    ct: '',
-    dur: 0,
-    err: '',
-    body: ''
-  };
-  try {
-    const r = await fetch(url, opts);
-    e.status = r.status;
-    e.ct = (r.headers.get('content-type') || '').split(';')[0];
-    const txt = await r.text();
-    e.body = txt.slice(0, 400);
-    e.dur = Math.round(performance.now() - t0);
-    DIAG.unshift(e);
-    if (DIAG.length > 60) DIAG.pop();
-    return {
-      ok: r.ok,
-      status: r.status,
-      text: txt,
-      json() { try { return JSON.parse(txt) } catch (x) { e.err = 'JSON parse error'; return null } }
-    };
-  } catch (x) {
-    e.dur = Math.round(performance.now() - t0);
-    e.err = (x.name === 'TimeoutError') ? 'Timeout' : (x.name === 'AbortError' ? 'Aborted' : (x instanceof TypeError ? 'CORS/Network blocked' : x.message));
-    DIAG.unshift(e);
-    if (DIAG.length > 60) DIAG.pop();
-    throw Object.assign(new Error(e.err), { diag: e });
+const DIAG=[];
+async function diagFetch(url,opts={},note=''){
+  const t0=performance.now();
+  const e={time:new Date().toISOString().slice(11,19),url,method:opts.method||'GET',note,
+    reqBody:(typeof opts.body==='string'?opts.body.slice(0,300):(opts.body?'[بيانات ثنائية/FormData]':'')),status:'',ct:'',dur:0,err:'',body:''};
+  try{
+    const r=await fetch(url,opts);
+    e.status=r.status;e.ct=(r.headers.get('content-type')||'').split(';')[0];
+    const txt=await r.text();
+    e.body=txt.slice(0,400);e.dur=Math.round(performance.now()-t0);
+    DIAG.unshift(e);if(DIAG.length>60)DIAG.pop();
+    return{ok:r.ok,status:r.status,text:txt,
+      json(){try{return JSON.parse(txt)}catch(x){e.err='JSON parse error';return null}}};
+  }catch(x){
+    e.dur=Math.round(performance.now()-t0);
+    e.err=(x.name==='TimeoutError')?'Timeout':(x.name==='AbortError'?'Aborted':(x instanceof TypeError?'CORS/Network blocked':x.message));
+    DIAG.unshift(e);if(DIAG.length>60)DIAG.pop();
+    throw Object.assign(new Error(e.err),{diag:e});
   }
 }
-
-function openDiag() {
-  $('diagList').textContent = cfg.backend.list ? (cfg.backend.list.kind + ' ' + (cfg.backend.list.path || '/')) : 'غير محدد';
-  $('diagExec').textContent = cfg.backend.execV2 ? ((cfg.backend.execV2.kind || 'rest') + ' ' + (cfg.backend.execV2.path || '') + ' (style ' + cfg.backend.execV2.style + ')') : 'غير محدد';
-  
-  // ★ إضافة معلومات أدوات Composio إلى لوحة التشخيص
-  const composioTools = tools.filter(t => {
-    const name = t.name.toLowerCase();
-    return name.includes('composio') || name.includes('session') || name.includes('auth') || name.includes('connect') || name.includes('toolkit');
-  });
-  
-  let composioInfo = '';
-  if (composioTools.length === 0) {
-    composioInfo = '⚠️ لا توجد أدوات Composio على هذا الخادم';
-  } else {
-    composioInfo = '✅ أدوات Composio المكتشفة:\n' + composioTools.map(t => '  - ' + t.name).join('\n');
-  }
-  
-  $('diagBody').innerHTML = (DIAG.length ? DIAG.map(e =>
-    `<div class="diag-entry">
-      <div class="du">${esc(e.method)} ${esc(e.url)} <span class="${e.err || e.status >= 400 ? 'dbad' : 'dok'}">${e.err ? esc(e.err) : ('HTTP ' + e.status)}</span></div>
-      <div>${e.time} · ${e.dur}ms · ${esc(e.ct || '—')} · ${esc(e.note)}</div>
-      ${e.reqBody ? `<pre>→ ${esc(e.reqBody)}</pre>` : ''}${e.body ? `<pre>← ${esc(e.body)}</pre>` : ''}
-    </div>`
-  ).join('') : '<div class="toolsEmpty">لا توجد طلبات بعد</div>') + 
-  `<div class="diag-entry" style="margin-top:8px;border-color:var(--accent);">
-    <div class="du">🔌 معلومات Composio</div>
-    <pre style="max-height:120px;font-size:10px;white-space:pre-wrap;">${esc(composioInfo)}</pre>
-  </div>`;
-  
+function openDiag(){
+  $('diagList').textContent=cfg.backend.list?(cfg.backend.list.kind+' '+(cfg.backend.list.path||'/')):'غير محدد';
+  $('diagExec').textContent=cfg.backend.execV2?((cfg.backend.execV2.kind||'rest')+' '+(cfg.backend.execV2.path||'')+' (style '+cfg.backend.execV2.style+')'):'غير محدد';
+  $('diagBody').innerHTML=DIAG.length?DIAG.map(e=>`
+    <div class="diag-entry">
+      <div class="du">${esc(e.method)} ${esc(e.url)} <span class="${e.err||e.status>=400?'dbad':'dok'}">${e.err?esc(e.err):('HTTP '+e.status)}</span></div>
+      <div>${e.time} · ${e.dur}ms · ${esc(e.ct||'—')} · ${esc(e.note)}</div>
+      ${e.reqBody?`<pre>→ ${esc(e.reqBody)}</pre>`:''}${e.body?`<pre>← ${esc(e.body)}</pre>`:''}
+    </div>`).join(''):'<div class="toolsEmpty">لا توجد طلبات بعد</div>';
   diagModal.classList.add('open');
 }
-
-function copyDiag() {
-  const rep = DIAG.map(e =>
-    `[${e.time}] ${e.method} ${e.url}\n  note:${e.note} status:${e.status || e.err} dur:${e.dur}ms ct:${e.ct}\n  req:${e.reqBody}\n  res:${e.body}`
-  ).join('\n\n');
-  
-  const composioTools = tools.filter(t => {
-    const name = t.name.toLowerCase();
-    return name.includes('composio') || name.includes('session') || name.includes('auth') || name.includes('connect') || name.includes('toolkit');
-  });
-  
-  const composioInfo = composioTools.length ? composioTools.map(t => t.name).join('\n') : 'لا توجد أدوات Composio';
-  
-  navigator.clipboard.writeText('=== AI Studio Diagnostics ===\nlist:' + JSON.stringify(cfg.backend.list) + '\nexec:' + JSON.stringify(cfg.backend.execV2) +
-    '\n\nComposio Tools:\n' + composioInfo + '\n\n' + rep);
+function copyDiag(){
+  const rep=DIAG.map(e=>`[${e.time}] ${e.method} ${e.url}\n  note:${e.note} status:${e.status||e.err} dur:${e.dur}ms ct:${e.ct}\n  req:${e.reqBody}\n  res:${e.body}`).join('\n\n');
+  navigator.clipboard.writeText('=== AI Studio Diagnostics ===\nlist:'+JSON.stringify(cfg.backend.list)+'\nexec:'+JSON.stringify(cfg.backend.execV2)+'\n\n'+rep);
   toast('📋 تم نسخ التقرير');
 }
 
 /* ============ 3) الثيم ============ */
-function applyTheme() { document.documentElement.dataset.theme = cfg.theme;
-  $('themeBtn').textContent = cfg.theme === 'dark' ? '☀️' : '🌙'; }
-
-function toggleTheme() { cfg.theme = cfg.theme === 'dark' ? 'light' : 'dark';
-  applyTheme();
-  persist(); }
+function applyTheme(){document.documentElement.dataset.theme=cfg.theme;$('themeBtn').textContent=cfg.theme==='dark'?'☀️':'🌙';}
+function toggleTheme(){cfg.theme=cfg.theme==='dark'?'light':'dark';applyTheme();persist();}
 
 /* ============ 4) مزوّد LLM ============ */
-function llmBase() { return cfg.proxyMode ? Backend.url() + '/llm' : cfg.baseUrl.replace(/\/+$/, ''); }
-
-function llmHeaders() {
-  if (cfg.proxyMode) return Backend.headers();
-  const k = cfg.apiKey,
-    h = { 'Content-Type': 'application/json' };
-  if (cfg.authType === 'api-key') h['api-key'] = k;
-  else if (cfg.authType === 'x-api-key') h['x-api-key'] = k;
-  else h.Authorization = 'Bearer ' + k;
-  return h;
-}
-
-function setLed(on) { $('apiLed').classList.toggle('on', on);
-  $('apiTxt').textContent = on ? 'متصل' : 'المزوّد'; }
-
-async function checkProvider() {
-  cfg.baseUrl = $('cfgBase').value.trim();
-  cfg.apiKey = $('cfgKey').value.trim();
-  cfg.authType = $('cfgAuth').value;
-  cfg.proxyMode = $('cfgProxy').checked;
-  cfg.chatPath = null;
-  if (!cfg.proxyMode && !cfg.baseUrl) return toast('⚠️ أدخل رابط API أولاً');
-  const b = llmBase(),
-    paths = cfg.proxyMode ? ['/models'] : (b.endsWith('/v1') ? ['/models'] : ['/models', '/v1/models']);
-  let lastErr = '';
-  for (const p of paths) {
-    try {
-      const r = await diagFetch(b + p, { headers: llmHeaders(), signal: AbortSignal.timeout(15000) }, 'listModels');
-      if (!r.ok) { lastErr = 'HTTP ' + r.status; continue; }
-      const d = r.json();
-      if (!d) { lastErr = 'ليست JSON'; continue; }
-      const list = (d.data || d.models || (Array.isArray(d) ? d : [])).map(m => m.id || m.name || m.model || m).filter(x =>
-        typeof x === 'string');
-      if (!list.length) { lastErr = 'استجابة بدون نماذج'; continue; }
-      cfg.models = [...new Set(list)];
-      if (!cfg.model || !cfg.models.includes(cfg.model)) cfg.model = cfg.models[0];
-      setLed(true);
-      persist();
-      renderModels();
-      return toast('✅ متصل — تم جلب ' + cfg.models.length + ' نموذج');
-    } catch (e) { lastErr = e.message; }
+function llmBase(){return cfg.proxyMode?Backend.url()+'/llm':cfg.baseUrl.replace(/\/+$/,'');}
+function llmHeaders(){
+  if(cfg.proxyMode)return Backend.headers();
+  const k=cfg.apiKey,h={'Content-Type':'application/json'};
+  if(cfg.authType==='api-key')h['api-key']=k;
+  else if(cfg.authType==='x-api-key')h['x-api-key']=k;
+  else h.Authorization='Bearer '+k;
+  return h;}
+function setLed(on){$('apiLed').classList.toggle('on',on);$('apiTxt').textContent=on?'متصل':'المزوّد';}
+async function checkProvider(){
+  cfg.baseUrl=$('cfgBase').value.trim();cfg.apiKey=$('cfgKey').value.trim();cfg.authType=$('cfgAuth').value;
+  cfg.proxyMode=$('cfgProxy').checked;cfg.chatPath=null;
+  if(!cfg.proxyMode&&!cfg.baseUrl)return toast('⚠️ أدخل رابط API أولاً');
+  const b=llmBase(),paths=cfg.proxyMode?['/models']:(b.endsWith('/v1')?['/models']:['/models','/v1/models']);
+  let lastErr='';
+  for(const p of paths){
+    try{
+      const r=await diagFetch(b+p,{headers:llmHeaders(),signal:AbortSignal.timeout(15000)},'listModels');
+      if(!r.ok){lastErr='HTTP '+r.status;continue;}
+      const d=r.json();if(!d){lastErr='ليست JSON';continue;}
+      const list=(d.data||d.models||(Array.isArray(d)?d:[])).map(m=>m.id||m.name||m.model||m).filter(x=>typeof x==='string');
+      if(!list.length){lastErr='استجابة بدون نماذج';continue;}
+      cfg.models=[...new Set(list)];
+      if(!cfg.model||!cfg.models.includes(cfg.model))cfg.model=cfg.models[0];
+      setLed(true);persist();renderModels();
+      return toast('✅ متصل — تم جلب '+cfg.models.length+' نموذج');
+    }catch(e){lastErr=e.message;}
   }
-  setLed(false);
-  toast('❌ فشل الفحص: ' + lastErr);
+  setLed(false);toast('❌ فشل الفحص: '+lastErr);
 }
-
-async function chatFetch(body, signal) {
-  const b = llmBase();
-  const cands = cfg.proxyMode ? ['/chat/completions'] : (cfg.chatPath ? [cfg.chatPath] : (b.endsWith('/v1') ?
-    ['/chat/completions'] : ['/chat/completions', '/v1/chat/completions']));
+async function chatFetch(body,signal){
+  const b=llmBase();
+  const cands=cfg.proxyMode?['/chat/completions']:(cfg.chatPath?[cfg.chatPath]:(b.endsWith('/v1')?['/chat/completions']:['/chat/completions','/v1/chat/completions']));
   let last;
-  for (const p of cands) {
-    const t0 = performance.now();
-    try {
-      const r = await fetch(b + p, { method: 'POST', headers: llmHeaders(), body: JSON.stringify(body), signal });
-      DIAG.unshift({
-        time: new Date().toISOString().slice(11, 19),
-        url: b + p,
-        method: 'POST',
-        note: 'chatFetch',
-        reqBody: JSON.stringify(body).slice(0, 300),
-        status: r.status,
-        ct: (r.headers.get('content-type') || '').split(';')[0],
-        dur: Math.round(performance.now() - t0),
-        err: '',
-        body: '(بث مباشر — الجسم يُقرأ لاحقاً في streamChat)'
-      });
-      if (DIAG.length > 60) DIAG.pop();
-      if (r.status === 404 || r.status === 405) { last = new Error('HTTP ' + r.status); continue; }
-      if (!cfg.proxyMode) cfg.chatPath = p;
-      setLed(true);
-      persist();
-      return r;
-    } catch (e) {
-      if (e.name === 'AbortError') throw e;
-      DIAG.unshift({
-        time: new Date().toISOString().slice(11, 19),
-        url: b + p,
-        method: 'POST',
-        note: 'chatFetch',
-        reqBody: JSON.stringify(body).slice(0, 300),
-        status: '',
-        ct: '',
-        dur: Math.round(performance.now() - t0),
-        err: (e instanceof TypeError ? 'CORS/Network blocked' : e.message),
-        body: ''
-      });
-      if (DIAG.length > 60) DIAG.pop();
-      last = e;
+  for(const p of cands){
+    const t0=performance.now();
+    try{
+      const r=await fetch(b+p,{method:'POST',headers:llmHeaders(),body:JSON.stringify(body),signal});
+      DIAG.unshift({time:new Date().toISOString().slice(11,19),url:b+p,method:'POST',note:'chatFetch',
+        reqBody:JSON.stringify(body).slice(0,300),status:r.status,ct:(r.headers.get('content-type')||'').split(';')[0],
+        dur:Math.round(performance.now()-t0),err:'',body:'(بث مباشر — الجسم يُقرأ لاحقاً في streamChat)'});
+      if(DIAG.length>60)DIAG.pop();
+      if(r.status===404||r.status===405){last=new Error('HTTP '+r.status);continue;}
+      if(!cfg.proxyMode)cfg.chatPath=p;
+      setLed(true);persist();return r;
+    }catch(e){
+      if(e.name==='AbortError')throw e;
+      DIAG.unshift({time:new Date().toISOString().slice(11,19),url:b+p,method:'POST',note:'chatFetch',
+        reqBody:JSON.stringify(body).slice(0,300),status:'',ct:'',dur:Math.round(performance.now()-t0),
+        err:(e instanceof TypeError?'CORS/Network blocked':e.message),body:''});
+      if(DIAG.length>60)DIAG.pop();
+      last=e;
     }
   }
-  setLed(false);
-  throw last || new Error('تعذر الاتصال بالمزوّد');
+  setLed(false);throw last||new Error('تعذر الاتصال بالمزوّد');
 }
-
-function renderModels() {
-  $('modelPick').innerHTML = '<option value="">— اختر النموذج —</option>' +
-    (cfg.models || []).map(m =>
-      `<option value="${esc(m)}" ${m === cfg.model ? 'selected' : ''}>${esc(m)}</option>`
-    ).join('');
-}
+function renderModels(){$('modelPick').innerHTML='<option value="">— اختر النموذج —</option>'+
+  (cfg.models||[]).map(m=>`<option value="${esc(m)}" ${m===cfg.model?'selected':''}>${esc(m)}</option>`).join('');}
 
 /* ============ 5) Zep ============ */
-async function zepEnsureSession(id) { if (!cfg.zep.enabled || !cfg.zep.key) return;
-  try {
-    await fetch('https://api.getzep.com/api/v2/sessions', {
-      method: 'POST',
-      headers: { 'Authorization': `Api-Key ${cfg.zep.key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: id })
-    });
-  } catch (e) {} }
-
-async function zepGetMemoryContext(id) { if (!cfg.zep.enabled || !cfg.zep.key) return '';
-  try {
-    const r = await fetch(`https://api.getzep.com/api/v2/sessions/${encodeURIComponent(id)}/memory`, { headers: {
-        'Authorization': `Api-Key ${cfg.zep.key}` } });
-    if (!r.ok) return '';
-    const d = await r.json();
-    const facts = (d.relevant_facts || d.facts || []).map(f => f.fact || f).join('\n');
-    const summary = d.summary?.content || '';
-    let out = '';
-    if (summary) out += `ملخص الذاكرة طويلة المدى:\n${summary}\n`;
-    if (facts) out += `حقائق مسترجعة:\n${facts}`;
-    return out;
-  } catch (e) { return ''; } }
-
-async function zepAddMemory(id, u, a) { if (!cfg.zep.enabled || !cfg.zep.key) return;
-  try {
-    await fetch(`https://api.getzep.com/api/v2/sessions/${encodeURIComponent(id)}/memory`, {
-      method: 'POST',
-      headers: { 'Authorization': `Api-Key ${cfg.zep.key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: [{ role: 'user', role_type: 'user', content: u },
-          { role: 'assistant', role_type: 'assistant', content: a }] })
-    });
-  } catch (e) {} }
+async function zepEnsureSession(id){if(!cfg.zep.enabled||!cfg.zep.key)return;
+  try{await fetch('https://api.getzep.com/api/v2/sessions',{method:'POST',
+    headers:{'Authorization':`Api-Key ${cfg.zep.key}`,'Content-Type':'application/json'},
+    body:JSON.stringify({session_id:id})});}catch(e){}}
+async function zepGetMemoryContext(id){if(!cfg.zep.enabled||!cfg.zep.key)return'';
+  try{const r=await fetch(`https://api.getzep.com/api/v2/sessions/${encodeURIComponent(id)}/memory`,
+      {headers:{'Authorization':`Api-Key ${cfg.zep.key}`}});
+    if(!r.ok)return'';
+    const d=await r.json();
+    const facts=(d.relevant_facts||d.facts||[]).map(f=>f.fact||f).join('\n');
+    const summary=d.summary?.content||'';
+    let out='';if(summary)out+=`ملخص الذاكرة طويلة المدى:\n${summary}\n`;
+    if(facts)out+=`حقائق مسترجعة:\n${facts}`;return out;
+  }catch(e){return'';}}
+async function zepAddMemory(id,u,a){if(!cfg.zep.enabled||!cfg.zep.key)return;
+  try{await fetch(`https://api.getzep.com/api/v2/sessions/${encodeURIComponent(id)}/memory`,{
+    method:'POST',headers:{'Authorization':`Api-Key ${cfg.zep.key}`,'Content-Type':'application/json'},
+    body:JSON.stringify({messages:[{role:'user',role_type:'user',content:u},
+      {role:'assistant',role_type:'assistant',content:a}]})});}catch(e){}}
 
 /* ============ 6) ToolsBackendAdapter ============ */
-function normalizeTools(raw) {
-  if (!Array.isArray(raw) || !raw.length) return null;
-  const out = [];
-  for (const t of raw) {
-    const f = t?.function || t;
-    if (!f || typeof f.name !== 'string' || !f.name) continue;
-    let params = f.parameters || f.input_schema || f.inputSchema;
-    if (!params || typeof params !== 'object' || Array.isArray(params)) params = { type: 'object', properties: {} };
-    if (!params.type) params.type = 'object';
-    out.push({
-      name: f.name,
-      description: typeof f.description === 'string' ? f.description : '',
-      parameters: params,
-      enabled: cfg.enabledToolNames.includes(f.name)
-    });
+function normalizeTools(raw){
+  if(!Array.isArray(raw)||!raw.length)return null;
+  const out=[];
+  for(const t of raw){
+    const f=t?.function||t;
+    if(!f||typeof f.name!=='string'||!f.name)continue;
+    let params=f.parameters||f.input_schema||f.inputSchema;
+    if(!params||typeof params!=='object'||Array.isArray(params))params={type:'object',properties:{}};
+    if(!params.type)params.type='object';
+    out.push({name:f.name,description:typeof f.description==='string'?f.description:'',parameters:params,
+      enabled:cfg.enabledToolNames.includes(f.name)});
   }
-  return out.length ? out : null;
+  return out.length?out:null;
 }
-
-const Backend = {
-  url() { return cfg.backend.url.replace(/\/+$/, ''); },
-  headers() {
-    const h = { 'Content-Type': 'application/json' },
-      k = cfg.backend.authKey;
-    if (k && cfg.backend.authType === 'bearer') h.Authorization = 'Bearer ' + k;
-    else if (k && cfg.backend.authType === 'x-api-key') h['x-api-key'] = k;
-    else if (k && cfg.backend.authType === 'api-key') h['api-key'] = k;
-    return h;
-  },
-  async listTools() {
-    if (cfg.backend.list) {
-      try { const r = await this._list(cfg.backend.list); if (r) return r; } catch (e) {}
-      cfg.backend.list = null;
+const Backend={
+  url(){return cfg.backend.url.replace(/\/+$/,'');},
+  headers(){
+    const h={'Content-Type':'application/json'},k=cfg.backend.authKey;
+    if(k&&cfg.backend.authType==='bearer')h.Authorization='Bearer '+k;
+    else if(k&&cfg.backend.authType==='x-api-key')h['x-api-key']=k;
+    else if(k&&cfg.backend.authType==='api-key')h['api-key']=k;
+    return h;},
+  async listTools(){
+    if(cfg.backend.list){
+      try{const r=await this._list(cfg.backend.list);if(r)return r;}catch(e){}
+      cfg.backend.list=null;
     }
-    const cands = [{ kind: 'rest', path: '/tools' }, { kind: 'rest', path: '/v1/tools' }, { kind: 'rest', path: '/api/tools' },
-      { kind: 'rest', path: '/list_tools' }, { kind: 'rest', path: '/tools/list' }, { kind: 'mcp', path: '/mcp' },
-      { kind: 'rest', path: '' }
-    ];
-    const errs = [];
-    for (const c of cands) {
-      try {
-        const r = await this._list(c);
-        if (r) { cfg.backend.list = c;
-          persist(); return r; }
-        errs.push(`${c.kind} ${c.path || '/'} → بنية JSON غير معروفة`);
-      } catch (e) { errs.push(`${c.kind} ${c.path || '/'} → ${e.message}`); }
+    const cands=[{kind:'rest',path:'/tools'},{kind:'rest',path:'/v1/tools'},{kind:'rest',path:'/api/tools'},
+      {kind:'rest',path:'/list_tools'},{kind:'rest',path:'/tools/list'},{kind:'mcp',path:'/mcp'},{kind:'rest',path:''}];
+    const errs=[];
+    for(const c of cands){
+      try{const r=await this._list(c);
+        if(r){cfg.backend.list=c;persist();return r;}
+        errs.push(`${c.kind} ${c.path||'/'} → بنية JSON غير معروفة`);
+      }catch(e){errs.push(`${c.kind} ${c.path||'/'} → ${e.message}`);}
     }
     throw new Error(errs.join('\n'));
   },
-  async _list(c) {
-    if (c.kind === 'mcp') {
-      const r = await diagFetch(this.url() + c.path, {
-        method: 'POST',
-        headers: this.headers(),
-        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
-        signal: AbortSignal.timeout(8000)
-      }, 'listTools MCP');
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      const d = r.json();
-      return normalizeTools(d?.result?.tools);
+  async _list(c){
+    if(c.kind==='mcp'){
+      const r=await diagFetch(this.url()+c.path,{method:'POST',headers:this.headers(),
+        body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/list'}),signal:AbortSignal.timeout(8000)},'listTools MCP');
+      if(!r.ok)throw new Error('HTTP '+r.status);
+      const d=r.json();return normalizeTools(d?.result?.tools);
     }
-    const r = await diagFetch(this.url() + c.path, { headers: this.headers(), signal: AbortSignal.timeout(8000) },
-    'listTools REST');
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const d = r.json();
-    if (!d) throw new Error('الاستجابة ليست JSON');
-    for (const cand of [d, d.tools, d.data, d.items, d.result, d.result?.tools, d.data?.tools, d.functions]) {
-      const n = normalizeTools(cand);
-      if (n) return n;
+    const r=await diagFetch(this.url()+c.path,{headers:this.headers(),signal:AbortSignal.timeout(8000)},'listTools REST');
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const d=r.json();if(!d)throw new Error('الاستجابة ليست JSON');
+    for(const cand of[d,d.tools,d.data,d.items,d.result,d.result?.tools,d.data?.tools,d.functions]){
+      const n=normalizeTools(cand);if(n)return n;
     }
     return null;
   },
-  _styles: [
-    (n, a) => ({ tool: n, arguments: a }),
-    (n, a) => ({ name: n, arguments: a }),
-    (n, a) => ({ tool_name: n, arguments: a }),
-    (n, a) => ({ tool: n, args: a }),
-    (n, a) => ({ name: n, args: a }),
+  /* ★ إصلاح جذري: main.py يقرأ الحقل "arguments" حصراً في CallRequest
+     (tool: str; arguments: Dict[str, Any]). أي نمط يرسل "args" بدل
+     "arguments" يمر بنجاح (FastAPI يتجاهل الحقول غير المعروفة بصمت)
+     لكن يصل للأداة بمعاملات فارغة دائماً — وهذا بالضبط سبب كل رسائل
+     "missing required argument" رغم أن المستخدم/النموذج كانا يرسلان
+     قيماً صحيحة. لذلك يجب أن يكون نمط {tool, arguments} هو أول نمط
+     يُجرَّب دائماً وأن يُخزَّن في مفتاح تخزين جديد (execV2) بدل المفتاح
+     القديم (exec) الذي قد يحمل من جلسات سابقة نمطاً خاطئاً مخزَّناً
+     بلا رجعة (لأن النمط الخاطئ كان "ينجح" ظاهرياً فيُحفَظ ويُستخدم للأبد).
+  */
+  _styles:[
+    (n,a)=>({tool:n,arguments:a}),
+    (n,a)=>({name:n,arguments:a}),
+    (n,a)=>({tool_name:n,arguments:a}),
+    (n,a)=>({tool:n,args:a}),
+    (n,a)=>({name:n,args:a}),
   ],
-  async execute(name, args) {
-    if (cfg.backend.execV2 && cfg.backend.execV2.style != null)
-      return this._exec(cfg.backend.execV2.path, cfg.backend.execV2.style, name, args);
-    if (cfg.backend.execV2?.kind === 'mcp') return this._execMcp(name, args);
-    const paths = ['/call', '/run', '/execute', '/tools/call', '/invoke', '/api/run'];
-    const errs = [];
-    for (const p of paths) {
-      for (let si = 0; si < this._styles.length; si++) {
-        try {
-          const out = await this._exec(p, si, name, args);
-          cfg.backend.execV2 = { path: p, style: si };
-          persist();
-          return out;
-        } catch (e) {
-          if (e.notFound) { errs.push(`${p} → 404`); break; }
-          if (e.wrongStyle) { errs.push(`${p} style${si} → 422`); continue; }
-          cfg.backend.execV2 = { path: p, style: si };
-          persist();
-          throw e;
+  async execute(name,args){
+    if(cfg.backend.execV2&&cfg.backend.execV2.style!=null)
+      return this._exec(cfg.backend.execV2.path,cfg.backend.execV2.style,name,args);
+    if(cfg.backend.execV2?.kind==='mcp')return this._execMcp(name,args);
+    const paths=['/call','/run','/execute','/tools/call','/invoke','/api/run'];
+    const errs=[];
+    for(const p of paths){
+      for(let si=0;si<this._styles.length;si++){
+        try{
+          const out=await this._exec(p,si,name,args);
+          cfg.backend.execV2={path:p,style:si};persist();return out;
+        }catch(e){
+          if(e.notFound){errs.push(`${p} → 404`);break;}
+          if(e.wrongStyle){errs.push(`${p} style${si} → 422`);continue;}
+          cfg.backend.execV2={path:p,style:si};persist();throw e;
         }
       }
     }
-    try {
-      const out = await this._execMcp(name, args);
-      cfg.backend.execV2 = { kind: 'mcp', path: '/mcp', style: null };
-      persist();
-      return out;
-    } catch (e) { errs.push('/mcp → ' + e.message); }
-    throw new Error('لم يُعثر على عقد تنفيذ:\n' + errs.join('\n'));
+    try{const out=await this._execMcp(name,args);
+      cfg.backend.execV2={kind:'mcp',path:'/mcp',style:null};persist();return out;
+    }catch(e){errs.push('/mcp → '+e.message);}
+    throw new Error('لم يُعثر على عقد تنفيذ:\n'+errs.join('\n'));
   },
-  async _exec(path, styleIdx, name, args) {
-    const body = this._styles[styleIdx](name, args);
-    const r = await diagFetch(this.url() + path, {
-      method: 'POST',
-      headers: this.headers(),
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(600000)
-    }, 'execute: ' + name);
-    if (r.status === 404 || r.status === 405) throw Object.assign(new Error('HTTP ' + r.status), { notFound: true });
-    if (r.status === 422) {
-      const d = r.json();
-      const topMissing = (d?.detail || []).some(x => x.type === 'missing' && ['tool', 'name', 'arguments', 'args',
-          'tool_name'
-        ].includes(x?.loc?.[1]));
-      if (topMissing) throw Object.assign(new Error('422 payload style'), { wrongStyle: true });
-      throw new Error('HTTP 422: ' + r.text.slice(0, 300));
+  async _exec(path,styleIdx,name,args){
+    const body=this._styles[styleIdx](name,args);
+    const r=await diagFetch(this.url()+path,{method:'POST',headers:this.headers(),
+      body:JSON.stringify(body),signal:AbortSignal.timeout(600000)},'execute: '+name);
+    if(r.status===404||r.status===405)throw Object.assign(new Error('HTTP '+r.status),{notFound:true});
+    if(r.status===422){
+      const d=r.json();
+      const topMissing=(d?.detail||[]).some(x=>x.type==='missing'&&['tool','name','arguments','args','tool_name'].includes(x?.loc?.[1]));
+      if(topMissing)throw Object.assign(new Error('422 payload style'),{wrongStyle:true});
+      throw new Error('HTTP 422: '+r.text.slice(0,300));
     }
-    if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + r.text.slice(0, 300));
+    if(!r.ok)throw new Error('HTTP '+r.status+': '+r.text.slice(0,300));
     return r.text;
   },
-  async _execMcp(name, args) {
-    const r = await diagFetch(this.url() + '/mcp', {
-      method: 'POST',
-      headers: this.headers(),
-      body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method: 'tools/call', params: { name, arguments: args } }),
-      signal: AbortSignal.timeout(600000)
-    }, 'execute MCP: ' + name);
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const d = r.json();
-    if (!d) throw new Error('ليست JSON');
-    if (d.error) throw new Error('Tool error: ' + (d.error.message || JSON.stringify(d.error)));
-    const res = d.result;
-    return typeof res === 'string' ? res : JSON.stringify(res?.content ?? res);
+  async _execMcp(name,args){
+    const r=await diagFetch(this.url()+'/mcp',{method:'POST',headers:this.headers(),
+      body:JSON.stringify({jsonrpc:'2.0',id:Date.now(),method:'tools/call',params:{name,arguments:args}}),
+      signal:AbortSignal.timeout(600000)},'execute MCP: '+name);
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const d=r.json();if(!d)throw new Error('ليست JSON');
+    if(d.error)throw new Error('Tool error: '+(d.error.message||JSON.stringify(d.error)));
+    const res=d.result;return typeof res==='string'?res:JSON.stringify(res?.content??res);
   }
 };
-
-async function callTool(name, args) {
-  const raw = await Backend.execute(name, args || {});
-  let d;
-  try { d = JSON.parse(raw); } catch (e) { throw new Error('استجابة غير صالحة من ' + name); }
-  if (d && d.detail) throw new Error(d.detail);
-  if (d && d.result !== undefined) return d.result;
+async function callTool(name,args){
+  const raw=await Backend.execute(name,args||{});
+  let d;try{d=JSON.parse(raw);}catch(e){throw new Error('استجابة غير صالحة من '+name);}
+  if(d&&d.detail)throw new Error(d.detail);
+  if(d&&d.result!==undefined)return d.result;
   return d;
 }
 
 /* ============ 7) سحب الأدوات + الاختبار ============ */
-async function loadTools(manual) {
-  $('toolsScroll').innerHTML = '<div class="toolsEmpty">⏳ جارٍ السحب...</div>';
-  try {
-    tools = await Backend.listTools();
-    renderTools();
-    renderComposio();
-    if (manual) toast('✅ تم سحب ' + tools.length + ' أداة');
-  } catch (e) {
-    tools = [];
-    $('toolsScroll').innerHTML = '<div class="toolsEmpty">❌ تعذر سحب الأدوات</div><div class="toolsErr">' + esc(e.message) +
-      '</div>';
-    if (manual) toast('❌ فشل السحب — افتح 🩺 للتفاصيل');
+async function loadTools(manual){
+  $('toolsScroll').innerHTML='<div class="toolsEmpty">⏳ جارٍ السحب...</div>';
+  try{
+    tools=await Backend.listTools();
+    renderTools();renderComposio();
+    if(manual)toast('✅ تم سحب '+tools.length+' أداة');
+  }catch(e){
+    tools=[];
+    $('toolsScroll').innerHTML='<div class="toolsEmpty">❌ تعذر سحب الأدوات</div><div class="toolsErr">'+esc(e.message)+'</div>';
+    if(manual)toast('❌ فشل السحب — افتح 🩺 للتفاصيل');
   }
 }
-
-function renderTools() {
-  const items = tools.map((t, i) => appOf(t.name) ? '' : `
+function renderTools(){
+  const items=tools.map((t,i)=>appOf(t.name)?'':`
     <div class="trow"><div class="tinfo"><div class="tname">${esc(t.name)}</div>
     <div class="tdesc">${esc(t.description)||'بدون وصف'}</div></div>
     <button class="testbtn" onclick="openTest(${i})">🧪</button>
     <label class="switch"><input type="checkbox" ${t.enabled?'checked':''}
       onchange="toggleTool(${i},this.checked)"><span class="slider"></span></label></div>`).join('');
-  $('toolsScroll').innerHTML = items || '<div class="toolsEmpty">لا توجد أدوات عامة</div>';
+  $('toolsScroll').innerHTML=items||'<div class="toolsEmpty">لا توجد أدوات عامة</div>';
   updateCount();
 }
-
-function toggleTool(i, on) {
-  tools[i].enabled = on;
-  cfg.enabledToolNames = on ? [...new Set([...cfg.enabledToolNames, tools[i].name])] : cfg.enabledToolNames.filter(n => n !==
-    tools[i].name);
-  persist();
-  updateCount();
+function toggleTool(i,on){
+  tools[i].enabled=on;
+  cfg.enabledToolNames=on?[...new Set([...cfg.enabledToolNames,tools[i].name])]
+    :cfg.enabledToolNames.filter(n=>n!==tools[i].name);
+  persist();updateCount();
 }
-
-function sampleArg(p) {
-  if (p && p.default !== undefined) return p.default;
-  if (p && Array.isArray(p.enum) && p.enum.length) return p.enum[0];
-  switch (p && p.type) {
-    case 'integer':
-    case 'number':
-      return 0;
-    case 'boolean':
-      return false;
-    case 'array':
-      return [];
-    case 'object':
-      return {};
-    default:
-      return '';
+function sampleArg(p){
+  if(p&&p.default!==undefined)return p.default;
+  if(p&&Array.isArray(p.enum)&&p.enum.length)return p.enum[0];
+  switch(p&&p.type){
+    case'integer':case'number':return 0;
+    case'boolean':return false;
+    case'array':return[];
+    case'object':return{};
+    default:return'';
   }
 }
-
-function sampleFromSchema(schema) {
-  const props = schema?.properties || {},
-    required = schema?.required || [];
-  const out = {};
-  required.forEach(k => out[k] = sampleArg(props[k]));
-  if (props.url !== undefined && !('url' in out)) out.url = '';
+function sampleFromSchema(schema){
+  const props=schema?.properties||{},required=schema?.required||[];
+  const out={};
+  required.forEach(k=>out[k]=sampleArg(props[k]));
+  // بعض الأدوات تقبل url أو base64_data كمدخل بديل دون أن يكون أيّهما "required"
+  // بشكل صريح في المخطط؛ نضيف حقل url فارغاً كتذكير عند وجوده لتفادي 400 غير مفهوم.
+  if(props.url!==undefined&&!('url' in out))out.url='';
   return out;
 }
-
-function openTest(i) { testTool = tools[i];
-  $('testName').textContent = testTool.name;
-  $('testArgs').value = JSON.stringify(sampleFromSchema(testTool.parameters), null, 2);
-  $('testReq').value = '';
-  $('testRes').value = '';
-  testModal.classList.add('open');
-  closeAll(); }
-
-async function runToolTest() {
-  if (!testTool) return;
-  let args;
-  try { args = JSON.parse($('testArgs').value || '{}'); } catch (e) { return toast('❌ JSON غير صالح: ' + e.message); }
-  $('testRes').value = '⏳ ...';
-  try { const out = await Backend.execute(testTool.name, args);
-    $('testRes').value = out; } catch (e) { $('testRes').value = 'ERROR: ' + e.message; }
-  const en = DIAG.find(x => x.note.includes(testTool.name));
-  if (en) $('testReq').value = `${en.method} ${en.url}\n${en.reqBody}`;
+function openTest(i){testTool=tools[i];$('testName').textContent=testTool.name;
+  $('testArgs').value=JSON.stringify(sampleFromSchema(testTool.parameters),null,2);
+  $('testReq').value='';$('testRes').value='';
+  testModal.classList.add('open');closeAll();}
+async function runToolTest(){
+  if(!testTool)return;
+  let args;try{args=JSON.parse($('testArgs').value||'{}');}catch(e){return toast('❌ JSON غير صالح: '+e.message);}
+  $('testRes').value='⏳ ...';
+  try{const out=await Backend.execute(testTool.name,args);$('testRes').value=out;}
+  catch(e){$('testRes').value='ERROR: '+e.message;}
+  const en=DIAG.find(x=>x.note.includes(testTool.name));
+  if(en)$('testReq').value=`${en.method} ${en.url}\n${en.reqBody}`;
 }
 
-/* ============ 8) Composio — الإصلاح الجراحي النهائي ============ */
-
-const COMPOSIO_APPS = [
-  { id: 'gmail', name: 'Gmail', icon: '📧', prefixes: ['gmail'] },
-  { id: 'googlecalendar', name: 'Google Calendar', icon: '📅', prefixes: ['googlecalendar', 'calendar', 'gcal'] },
-  { id: 'slack', name: 'Slack', icon: '💬', prefixes: ['slack'] },
-  { id: 'github', name: 'GitHub', icon: '🐙', prefixes: ['github'] },
-  { id: 'notion', name: 'Notion', icon: '📝', prefixes: ['notion'] },
-  { id: 'googledrive', name: 'Google Drive', icon: '📁', prefixes: ['googledrive', 'drive', 'gdrive'] },
-  { id: 'googlesheets', name: 'Google Sheets', icon: '📊', prefixes: ['googlesheets', 'sheets', 'gsheets'] },
-  { id: 'twitter', name: 'X / Twitter', icon: '🐦', prefixes: ['twitter', 'x'] },
-  { id: 'reddit', name: 'Reddit', icon: '👽', prefixes: ['reddit'] },
-  { id: 'facebook', name: 'Facebook', icon: '📘', prefixes: ['facebook'] },
-  { id: 'instagram', name: 'Instagram', icon: '📸', prefixes: ['instagram'] },
-  { id: 'linkedin', name: 'LinkedIn', icon: '💼', prefixes: ['linkedin'] },
-  { id: 'youtube', name: 'YouTube', icon: '▶️', prefixes: ['youtube'] },
-  { id: 'discord', name: 'Discord', icon: '🎮', prefixes: ['discord'] },
-  { id: 'telegram', name: 'Telegram', icon: '✈️', prefixes: ['telegram'] },
-  { id: 'apify', name: 'Apify', icon: '🕷️', prefixes: ['apify'] },
-  { id: 'trello', name: 'Trello', icon: '📋', prefixes: ['trello'] },
-  { id: 'asana', name: 'Asana', icon: '✅', prefixes: ['asana'] },
-  { id: 'jira', name: 'Jira', icon: '🧩', prefixes: ['jira'] },
-  { id: 'hubspot', name: 'HubSpot', icon: '🧡', prefixes: ['hubspot'] },
-  { id: 'stripe', name: 'Stripe', icon: '💳', prefixes: ['stripe'] },
-  { id: 'dropbox', name: 'Dropbox', icon: '📦', prefixes: ['dropbox'] },
-  { id: 'zoom', name: 'Zoom', icon: '🎥', prefixes: ['zoom'] },
-  { id: 'airtable', name: 'Airtable', icon: '🗂️', prefixes: ['airtable'] },
-  { id: 'calendly', name: 'Calendly', icon: '🗓️', prefixes: ['calendly'] },
-  { id: 'outlook', name: 'Outlook', icon: '📩', prefixes: ['outlook', 'microsoftoutlook'] },
-  { id: 'onedrive', name: 'OneDrive', icon: '☁️', prefixes: ['onedrive', 'microsoftonedrive'] },
-  { id: 'shopify', name: 'Shopify', icon: '🛍️', prefixes: ['shopify'] },
-  { id: 'figma', name: 'Figma', icon: '🎨', prefixes: ['figma'] },
-  { id: 'salesforce', name: 'Salesforce', icon: '☁️', prefixes: ['salesforce'] },
-  { id: 'mailchimp', name: 'Mailchimp', icon: '🐵', prefixes: ['mailchimp'] },
-  { id: 'supabase', name: 'Supabase', icon: '⚡', prefixes: ['supabase'] },
+/* ============ 8) Composio ============ */
+// ★ القائمة مأخوذة من: (أ) الحسابات الظاهرة فعلياً في لوحة Composio الخاصة
+// بالمستخدم (Gmail, GitHub, Google Calendar, Notion, Google Sheets, Slack,
+// Google Drive, Reddit, Facebook, Apify)، و(ب) أهم المنصات الشائعة الأخرى
+// المتوفرة كـ Toolkits جاهزة في Composio والتي يستخدمها الناس عادة، لإتاحة
+// ربطها لاحقاً بضغطة واحدة دون تعديل الكود مجدداً.
+const COMPOSIO_APPS=[
+  {id:'gmail',name:'Gmail',icon:'📧',prefixes:['gmail']},
+  {id:'googlecalendar',name:'Google Calendar',icon:'📅',prefixes:['googlecalendar','calendar','gcal']},
+  {id:'slack',name:'Slack',icon:'💬',prefixes:['slack']},
+  {id:'github',name:'GitHub',icon:'🐙',prefixes:['github']},
+  {id:'notion',name:'Notion',icon:'📝',prefixes:['notion']},
+  {id:'googledrive',name:'Google Drive',icon:'📁',prefixes:['googledrive','drive','gdrive']},
+  {id:'googlesheets',name:'Google Sheets',icon:'📊',prefixes:['googlesheets','sheets','gsheets']},
+  {id:'googledocs',name:'Google Docs',icon:'📄',prefixes:['googledocs','gdocs']},
+  {id:'googlemeet',name:'Google Meet',icon:'🎦',prefixes:['googlemeet','gmeet']},
+  {id:'twitter',name:'X / Twitter',icon:'🐦',prefixes:['twitter','x']},
+  {id:'reddit',name:'Reddit',icon:'👽',prefixes:['reddit']},
+  {id:'facebook',name:'Facebook',icon:'📘',prefixes:['facebook']},
+  {id:'instagram',name:'Instagram',icon:'📸',prefixes:['instagram']},
+  {id:'whatsapp',name:'WhatsApp',icon:'🟢',prefixes:['whatsapp']},
+  {id:'linkedin',name:'LinkedIn',icon:'💼',prefixes:['linkedin']},
+  {id:'youtube',name:'YouTube',icon:'▶️',prefixes:['youtube']},
+  {id:'discord',name:'Discord',icon:'🎮',prefixes:['discord']},
+  {id:'telegram',name:'Telegram',icon:'✈️',prefixes:['telegram']},
+  {id:'apify',name:'Apify',icon:'🕷️',prefixes:['apify']},
+  {id:'trello',name:'Trello',icon:'📋',prefixes:['trello']},
+  {id:'asana',name:'Asana',icon:'✅',prefixes:['asana']},
+  {id:'jira',name:'Jira',icon:'🧩',prefixes:['jira']},
+  {id:'hubspot',name:'HubSpot',icon:'🧡',prefixes:['hubspot']},
+  {id:'stripe',name:'Stripe',icon:'💳',prefixes:['stripe']},
+  {id:'dropbox',name:'Dropbox',icon:'📦',prefixes:['dropbox']},
+  {id:'zoom',name:'Zoom',icon:'🎥',prefixes:['zoom']},
+  {id:'airtable',name:'Airtable',icon:'🗂️',prefixes:['airtable']},
+  {id:'calendly',name:'Calendly',icon:'🗓️',prefixes:['calendly']},
+  {id:'outlook',name:'Outlook',icon:'📩',prefixes:['outlook','microsoftoutlook']},
+  {id:'onedrive',name:'OneDrive',icon:'☁️',prefixes:['onedrive','microsoftonedrive']},
+  {id:'shopify',name:'Shopify',icon:'🛍️',prefixes:['shopify']},
+  {id:'figma',name:'Figma',icon:'🎨',prefixes:['figma']},
+  {id:'salesforce',name:'Salesforce',icon:'☁️',prefixes:['salesforce']},
+  {id:'mailchimp',name:'Mailchimp',icon:'🐵',prefixes:['mailchimp']},
+  {id:'supabase',name:'Supabase',icon:'⚡',prefixes:['supabase']},
 ];
-
-let pollTimer = null;
-let pendingApp = null;
-
-function appOf(n) {
-  const p = String(n || '').split(/[_.]/)[0].toLowerCase();
-  return COMPOSIO_APPS.find(a => a.prefixes.includes(p))?.id || null;
-}
-
-function appState(id) {
-  cfg.composio[id] = cfg.composio[id] || { connected: false, enabled: false };
-  return cfg.composio[id];
-}
-
-// ★★★ الإصلاح الجراحي: دالة اكتشاف الأدوات الديناميكية (محسّنة) ★★★
-function findComposioTool(exactCandidates, keywordGroups) {
-  // 1. البحث عن اسم مطابق تام (مع مراعاة حالة الأحرف)
-  for (const candidate of exactCandidates) {
-    const found = tools.find(t => {
-      const toolName = t.name.toLowerCase();
-      const candLower = candidate.toLowerCase();
-      return toolName === candLower || toolName.includes(candLower);
-    });
-    if (found) {
-      return found.name;
-    }
+let pollTimer=null,pendingApp=null;
+function appOf(n){const p=n.split(/[_.]/)[0].toLowerCase();return COMPOSIO_APPS.find(a=>a.prefixes.includes(p))?.id||null;}
+function appState(id){return cfg.composio[id]=cfg.composio[id]||{connected:false,enabled:false};}
+// ★ إصلاح جذري لخطأ 404 في تسجيل الدخول: كانت أسماء أدوات Composio
+// (composio_create_session, composio_authorize_toolkit, composio_list_
+// connected_tools) مُثبَّتة حرفياً في الكود بافتراض أنها موجودة دائماً بنفس
+// الاسم على أي خادم باك اند. لكن بعد تغيير رابط الباك اند، قد يعرّض الخادم
+// الجديد نفس الوظيفة بأسماء مختلفة (أو لا يعرضها إطلاقاً) — فيصل الطلب فعلاً
+// إلى الخادم الصحيح لكن باسم أداة غير موجود عنده، فيردّ 404، وهذا ما كان
+// يظهر رغم أن تسجيل الدخول "كان يعمل سابقاً" مع الخادم القديم تحديداً.
+// الإصلاح: بدل الافتراض الأعمى، نبحث فعلياً داخل قائمة الأدوات التي سحبناها
+// من الخادم الحالي (نفس tools المستخدمة في قسم "🧰 أدوات الباك اند") عن أداة
+// تُطابق الاسم المتوقع أو تحتوي كلماته المفتاحية، ونستخدم الاسم الحقيقي
+// الموجود فعلياً. إن لم توجد أي أداة مطابقة، نُخبر المستخدم بوضوح بدل محاولة
+// استدعاء اسم وهمي والحصول على 404 غامض.
+function findComposioTool(exactCandidates,keywordGroups){
+  for(const c of exactCandidates)if(tools.some(t=>t.name===c))return c;
+  for(const kws of keywordGroups){
+    const t=tools.find(x=>{const n=x.name.toLowerCase();return kws.every(k=>n.includes(k));});
+    if(t)return t.name;
   }
-
-  // 2. البحث عن تطابق بالكلمات المفتاحية (جميع الكلمات)
-  for (const keywords of keywordGroups) {
-    const found = tools.find(t => {
-      const name = t.name.toLowerCase();
-      return keywords.every(k => name.includes(k.toLowerCase()));
-    });
-    if (found) {
-      return found.name;
-    }
-  }
-
-  // 3. البحث المرن: أي كلمة من الكلمات المفتاحية
-  for (const keywords of keywordGroups) {
-    const found = tools.find(t => {
-      const name = t.name.toLowerCase();
-      return keywords.some(k => name.includes(k.toLowerCase()));
-    });
-    if (found) {
-      return found.name;
-    }
-  }
-
   return null;
 }
-
-function renderComposio() {
-  $('composioScroll').innerHTML = COMPOSIO_APPS.map(app => {
-    const state = appState(app.id);
-    const toolCount = tools.filter(t => appOf(t.name) === app.id).length;
-    const pending = pendingApp === app.id;
-
-    const statusText = state.connected ?
-      '● متصل' :
-      pending ?
-      '◌ بانتظار تأكيد الخادم...' :
-      '○ غير متصل';
-
-    const statusClass = state.connected ? 'on' : pending ? 'pending' : '';
-
-    return `<div class="crow2"><div class="aicon">${app.icon}</div>
-    <div class="ainfo"><div class="aname">${app.name}</div>
-    <div class="astat ${statusClass}">
-        ${statusText}
-        ${toolCount ? ' · ' + toolCount + ' أداة' : ''}
-    </div></div>
-    <label class="switch"><input type="checkbox" ${state.enabled ? 'checked' : ''}
-        onchange="appState('${app.id}').enabled=this.checked;persist();updateCount()"><span class="slider"></span></label>
-    <button class="authbtn ${state.connected ? 'connected' : ''}"
-        onclick="event.stopPropagation();${state.connected ? `composioLogout('${app.id}')` : `composioLogin('${app.id}')`}">
-        ${state.connected ? 'تسجيل الخروج' : 'تسجيل الدخول'}</button></div>`;
-  }).join('');
+function renderComposio(){
+  $('composioScroll').innerHTML=COMPOSIO_APPS.map(a=>{
+    const st=appState(a.id),n=tools.filter(t=>appOf(t.name)===a.id).length;
+    const pending=pendingApp===a.id;
+    return`<div class="crow2"><div class="aicon">${a.icon}</div>
+      <div class="ainfo"><div class="aname">${a.name}</div>
+      <div class="astat ${st.connected?'on':(pending?'pending':'')}">${st.connected?'● متصل':(pending?'◌ بانتظار تأكيد الخادم...':'○ غير متصل')}${n?' · '+n+' أداة':''}</div></div>
+      <label class="switch"><input type="checkbox" ${st.enabled?'checked':''}
+        onchange="appState('${a.id}').enabled=this.checked;persist();updateCount()"><span class="slider"></span></label>
+      <button class="authbtn ${st.connected?'connected':''}"
+        onclick="event.stopPropagation();${st.connected?`composioLogout('${a.id}')`:`composioLogin('${a.id}')`}">
+        ${st.connected?'تسجيل الخروج':'تسجيل الدخول'}</button></div>`;}).join('');
 }
-
-// ★★★ الإصلاح الجراحي: composioLogin (محسّن) ★★★
-async function composioLogin(app) {
-  try {
-    if (!cfg.composioUserId) {
-      cfg.composioUserId = 'u_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-      persist();
-    }
-
-    // ★ اكتشاف أداة إنشاء الجلسة
-    const createTool = findComposioTool(
-      [
-        'composio_create_session',
-        'create_session',
-        'composio_session',
-        'create_composio_session',
-        'createSession',
-        'session_create',
-        'composio_create',
-        'create_session_composio'
-      ],
-      [
-        ['composio', 'create', 'session'],
-        ['composio', 'session'],
-        ['create', 'session'],
-        ['composio', 'create'],
-        ['session', 'create'],
-        ['composio', 'init']
-      ]
-    );
-
-    if (!createTool) {
-      toast('⚠️ لا توجد أداة إنشاء جلسة Composio على هذا الخادم — افتح 🩺 للتفاصيل');
-      return;
-    }
-
-    toast('⏳ يتم إنشاء جلسة اتصال مع Composio...');
-
-    const session = await callTool(createTool, {
-      user_id: cfg.composioUserId,
-      toolkits: [app]
-    });
-
-    const sessionId = session?.session_id || session?.id || session?.data?.session_id;
-    if (!sessionId) {
-      throw new Error('لم يرجع الخادم session_id');
-    }
-
-    // ★ اكتشاف أداة التفويض
-    const authTool = findComposioTool(
-      [
-        'composio_authorize_toolkit',
-        'authorize_toolkit',
-        'composio_auth',
-        'auth_toolkit',
-        'authorize',
-        'composio_authorize',
-        'authorize_session',
-        'composio_auth_toolkit'
-      ],
-      [
-        ['composio', 'authorize'],
-        ['composio', 'auth'],
-        ['authorize', 'toolkit'],
-        ['auth', 'toolkit'],
-        ['composio', 'link'],
-        ['link', 'toolkit']
-      ]
-    );
-
-    if (!authTool) {
-      toast('⚠️ لا توجد أداة تفويض على هذا الخادم — افتح 🩺 للتفاصيل');
-      return;
-    }
-
-    const auth = await callTool(authTool, {
-      session_id: sessionId,
-      toolkit: app
-    });
-
-    const url = auth?.redirect_url || auth?.url || auth?.link || auth?.data?.redirect_url;
-    if (!/^https?:\/\//i.test(url || '')) {
-      throw new Error('لا يوجد رابط تفويض صالح');
-    }
-
-    window.open(url, '_blank', 'noopener,noreferrer');
-    pendingApp = app;
-    renderComposio();
+async function composioLogin(app){
+  try{
+    if(!cfg.composioUserId){cfg.composioUserId='u_'+Date.now().toString(36)+Math.random().toString(36).slice(2,8);persist();}
+    const createTool=findComposioTool(['composio_create_session'],[['composio','create','session'],['composio','session']]);
+    if(!createTool)throw new Error('لا توجد أداة إنشاء جلسة Composio على هذا الخادم — راجع 🩺 أو أعد سحب الأدوات ⟳');
+    toast('⏳ يُنشئ جلسة اتصال...');
+    const sess=await callTool(createTool,{user_id:cfg.composioUserId,toolkits:[app]});
+    const sessionId=sess?.session_id;
+    if(!sessionId)throw new Error('لم يُرجع الخادم session_id');
+    const authTool=findComposioTool(['composio_authorize_toolkit'],[['composio','authorize'],['composio','auth','toolkit']]);
+    if(!authTool)throw new Error('لا توجد أداة تفويض (authorize) على هذا الخادم — راجع 🩺 أو أعد سحب الأدوات ⟳');
+    const auth=await callTool(authTool,{session_id:sessionId,toolkit:app});
+    const url=auth?.redirect_url;
+    if(!/^http/.test(url||''))throw new Error('لا يوجد رابط تفويض صالح في رد الخادم');
+    window.open(url,'_blank');
+    pendingApp=app;renderComposio();
     toast('🔐 أكمل تسجيل الدخول في التبويب الجديد — سيتم التأكيد تلقائياً');
-
-    // ★ بدء الـ Polling
-    let attempts = 0;
-    clearInterval(pollTimer);
-    pollTimer = setInterval(async () => {
-      attempts++;
-      await refreshComposio(false);
-      if (appState(app).connected) {
-        clearInterval(pollTimer);
-        pendingApp = null;
-        renderComposio();
-        toast('✅ تم الاتصال بـ ' + app + ' بنجاح!');
-      } else if (attempts > 40) {
-        clearInterval(pollTimer);
-        pendingApp = null;
-        renderComposio();
-        toast('⌛ انتهت المهلة — اضغط ⟳ بعد إتمام الدخول');
-      }
-    }, 3000);
-
-  } catch (error) {
-    toast('❌ تعذر بدء تسجيل الدخول: ' + error.message);
-  }
+    let n=0;clearInterval(pollTimer);
+    pollTimer=setInterval(async()=>{
+      n++;await refreshComposio(false);
+      if(appState(app).connected){clearInterval(pollTimer);pendingApp=null;renderComposio();toast('✅ تم الاتصال بـ '+app);}
+      else if(n>40){clearInterval(pollTimer);pendingApp=null;renderComposio();toast('⌛ انتهت المهلة — اضغط ⟳ بعد إتمام الدخول');}
+    },3000);
+  }catch(e){toast('❌ تعذر بدء تسجيل الدخول: '+e.message);}
 }
-
-// ★★★ الإصلاح الجراحي: composioLogout (يعمل بشكل صحيح) ★★★
-function composioLogout(app) {
-  // ★ البحث عن أداة قطع الاتصال
-  const revokeTool = findComposioTool(
-    [
-      'composio_delete_connected_account',
-      'composio_disconnect_toolkit',
-      'composio_revoke_connection',
-      'delete_connection',
-      'disconnect_toolkit',
-      'composio_delete',
-      'composio_revoke',
-      'revoke_connection',
-      'disconnect_connection',
-      'composio_remove_connection'
-    ],
-    [
-      ['composio', 'delete'],
-      ['composio', 'disconnect'],
-      ['composio', 'revoke'],
-      ['delete', 'connection'],
-      ['disconnect'],
-      ['revoke'],
-      ['composio', 'remove'],
-      ['remove', 'connection']
-    ]
+// ★ الآن يحاول فعلياً قفل/إلغاء الاتصال من جهة الخادم (لا مجرد إخفاء محلي
+// كما كان سابقاً)، عبر نفس آلية الاكتشاف الديناميكي: يبحث عن أداة حذف/فصل
+// اتصال حقيقية بين الأدوات المسحوبة فعلياً، ويستدعيها. إن لم توجد أي أداة
+// كهذه على الخادم الحالي، أو فشل الاستدعاء، يُخبر المستخدم بصراحة أن الإيقاف
+// محلي فقط بدل الادّعاء الصامت بأن الحساب فُصل فعلياً.
+async function composioLogout(app){
+  const st=appState(app);
+  const revokeTool=findComposioTool(
+    ['composio_delete_connected_account','composio_disconnect_toolkit','composio_revoke_connection','composio_delete_connection'],
+    [['composio','delete','connect'],['composio','disconnect'],['composio','revoke']]
   );
-
-  // ★ إذا وجدت أداة قطع الاتصال، استخدمها
-  if (revokeTool) {
-    try {
-      toast('⏳ يتم قطع الاتصال...');
-      
-      callTool(revokeTool, {
-        user_id: cfg.composioUserId,
-        toolkit: app
-      });
-      
-      appState(app.id).connected = false;
-      appState(app.id).enabled = false;
-      persist();
-      renderComposio();
-      updateCount();
-      toast('✅ تم قطع الاتصال بـ ' + app);
+  if(revokeTool){
+    try{
+      toast('⏳ يُقفل الاتصال...');
+      await callTool(revokeTool,{user_id:cfg.composioUserId,toolkit:app});
+      st.connected=false;st.enabled=false;
+      persist();renderComposio();updateCount();
+      toast('✅ تم قفل الاتصال فعلياً بـ '+app);
       return;
-    } catch (error) {
-      toast('⚠️ تعذر قطع الاتصال من الخادم (' + error.message + ') — تم الإيقاف محلياً');
+    }catch(e){
+      toast('⚠️ تعذّر قفل الاتصال من الخادم ('+e.message+') — تم إيقاف الاستخدام محلياً فقط');
     }
-  } else {
-    toast('⚠️ لا توجد أداة قطع اتصال على هذا الخادم — تم الإيقاف محلياً');
+  }else{
+    toast('⚠️ لا توجد أداة قفل اتصال على هذا الخادم — تم إيقاف الاستخدام محلياً فقط');
   }
-
-  // ★ الإيقاف المحلي كحل احتياطي (يعمل دائماً)
-  appState(app.id).connected = false;
-  appState(app.id).enabled = false;
-  persist();
-  renderComposio();
-  updateCount();
+  st.connected=false;st.enabled=false;
+  persist();renderComposio();updateCount();
 }
-
-// ★★★ الإصلاح الجراحي: refreshComposio (محسّن) ★★★
-async function refreshComposio(manual = false) {
-  const listTool = findComposioTool(
-    [
-      'composio_list_connected_tools',
-      'list_connected_tools',
-      'composio_list',
-      'get_connections',
-      'list_connections',
-      'composio_connections',
-      'get_connected_tools',
-      'list_tools_connected'
-    ],
-    [
-      ['composio', 'connected'],
-      ['composio', 'list'],
-      ['list', 'connection'],
-      ['get', 'connection'],
-      ['composio', 'status'],
-      ['connection', 'status']
-    ]
-  );
-
-  if (!listTool) {
-    if (manual) {
-      toast('⚠️ لا توجد أداة لعرض حالة الاتصالات على هذا الخادم');
-    }
-    renderComposio();
-    return;
-  }
-
-  try {
-    const data = await callTool(listTool, {});
-    const items = data?.connected_tools || data?.connections || data?.data || data?.items || [];
-
-    COMPOSIO_APPS.forEach(app => {
-      appState(app.id).connected = items.some(item => {
-        const itemId = item.slug || item.toolkit || item.app || item.id || item.name;
-        return itemId === app.id && (item.status === 'ACTIVE' || item.active === true || item.connected === true);
-      });
+async function refreshComposio(manual){
+  const listTool=findComposioTool(['composio_list_connected_tools'],[['composio','connected'],['composio','list','connect']]);
+  if(!listTool){if(manual)toast('⚠️ لا توجد أداة لعرض حالة اتصالات Composio على هذا الخادم');return;}
+  try{
+    const d=await callTool(listTool,{});
+    const items=d?.connected_tools||d?.connections||[];
+    COMPOSIO_APPS.forEach(a=>{
+      appState(a.id).connected=items.some(x=>(x.slug||x.toolkit||x.app)===a.id&&(x.status==='ACTIVE'||x.active===true));
     });
-
-    persist();
-    renderComposio();
-    if (manual) {
-      toast('✅ تم تحديث الحالة من الخادم');
-    }
-  } catch (error) {
-    if (manual) {
-      toast('❌ تعذر تحديث حالة Composio: ' + error.message);
-    }
-    renderComposio();
-  }
+    persist();renderComposio();
+    if(manual)toast('✅ تم تحديث الحالة من الخادم');
+  }catch(e){if(manual)toast('❌ تعذر تحديث حالة Composio: '+e.message);renderComposio();}
 }
-
-function updateCount() {
-  const n = enabledTools().length;
-  $('toolCount').style.display = n ? 'inline-block' : 'none';
-  $('toolCount').textContent = '🧰 ' + n + ' مفعّلة';
-}
-
-function enabledTools() {
-  return tools.filter(t => {
-    const a = appOf(t.name);
-    return a ? (cfg.composio[a]?.enabled) : t.enabled;
-  }).map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));
-}
+function updateCount(){const n=enabledTools().length;
+  $('toolCount').style.display=n?'inline-block':'none';
+  $('toolCount').textContent='🧰 '+n+' مفعّلة';}
+function enabledTools(){
+  return tools.filter(t=>{const a=appOf(t.name);return a?(cfg.composio[a]?.enabled):t.enabled;})
+    .map(t=>({type:'function',function:{name:t.name,description:t.description,parameters:t.parameters}}));}
 
 /* ============ 9) المحادثات + Context ============ */
-function loadAll() {
-  try { const d = JSON.parse(localStorage.getItem(LS) || '{}');
-    Object.assign(cfg, d.cfg || {});
-    sessions = d.sessions || []; } catch (e) {}
-  cfg.composio = cfg.composio || {};
-  cfg.zep = cfg.zep || { enabled: false, key: '' };
-  cfg.composioUserId = cfg.composioUserId || ('u_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
-  cfg.enabledToolNames = cfg.enabledToolNames || [];
-  cfg.backend = cfg.backend || { url: 'https://ayb-bh92-mcp.hf.space', authType: 'none', authKey: '', list: null,
-    execV2: null };
-  if (cfg.backend.url === 'https://ayb-bh92-tools.hf.space') {
-    cfg.backend.url = 'https://ayb-bh92-mcp.hf.space';
-    cfg.backend.list = null;
-    cfg.backend.execV2 = null;
+function loadAll(){
+  try{const d=JSON.parse(localStorage.getItem(LS)||'{}');Object.assign(cfg,d.cfg||{});sessions=d.sessions||[];}catch{}
+  cfg.composio=cfg.composio||{};cfg.zep=cfg.zep||{enabled:false,key:''};
+  cfg.composioUserId=cfg.composioUserId||('u_'+Date.now().toString(36)+Math.random().toString(36).slice(2,8));
+  cfg.enabledToolNames=cfg.enabledToolNames||[];
+  cfg.backend=cfg.backend||{url:'https://ayb-bh92-mcp.hf.space',authType:'none',authKey:'',list:null,execV2:null};
+  // ★ ترحيل تلقائي لرابط MCP: المتصفحات التي سبق أن حفظت الرابط القديم في
+  // localStorage تُبقي عليه عند كل تحميل (لأنه يُقرأ من التخزين ويُطغى على
+  // القيمة الافتراضية أعلاه) — هذا هو سبب عدم ظهور الرابط الجديد في الواجهة
+  // رغم تعديل القيمة الافتراضية في الكود. الإصلاح: إن كانت القيمة المحفوظة
+  // هي الرابط القديم بالضبط (أي المستخدم لم يُخصّصه يدوياً برابط آخر)، نستبدله
+  // تلقائياً بالجديد، ونُعيد ضبط عُقد الاكتشاف (list/execV2) لأنها خاصة
+  // بالخادم القديم ولن تصلح مع الخادم الجديد.
+  if(cfg.backend.url==='https://ayb-bh92-tools.hf.space'){
+    cfg.backend.url='https://ayb-bh92-mcp.hf.space';
+    cfg.backend.list=null;cfg.backend.execV2=null;
   }
-  if ('exec' in cfg.backend) delete cfg.backend.exec;
-  $('cfgBase').value = cfg.baseUrl;
-  $('cfgKey').value = cfg.apiKey;
-  $('cfgAuth').value = cfg.authType || 'bearer';
-  $('cfgTools').value = cfg.backend.url;
-  $('cfgBeAuth').value = cfg.backend.authType || 'none';
-  $('cfgBeKey').value = cfg.backend.authKey || '';
-  $('cfgProxy').checked = !!cfg.proxyMode;
-  $('cfgSys').value = cfg.sysPrompt;
-  $('cfgTemp').value = cfg.temp;
-  $('cfgMax').value = cfg.maxTok;
-  $('cfgTopP').value = cfg.topP;
-  $('cfgZepOn').checked = cfg.zep.enabled;
-  $('cfgZepKey').value = cfg.zep.key;
-  applyTheme();
-  renderModels();
-  renderSessions();
-  renderComposio();
-  sessions.length ? openSession(sessions[0].id) : newChat();
-  loadTools(false);
-  refreshComposio(false);
+  // ★ إبطال أي ذاكرة مؤقتة قديمة كانت تخزّن نمط استدعاء خاطئ (args بدل arguments)
+  // من جلسات سابقة قبل هذا الإصلاح — نحذفها صراحةً حتى لا تتعارض مع أي كود قديم.
+  if('exec' in cfg.backend)delete cfg.backend.exec;
+  $('cfgBase').value=cfg.baseUrl;$('cfgKey').value=cfg.apiKey;$('cfgAuth').value=cfg.authType||'bearer';
+  $('cfgTools').value=cfg.backend.url;$('cfgBeAuth').value=cfg.backend.authType||'none';$('cfgBeKey').value=cfg.backend.authKey||'';
+  $('cfgProxy').checked=!!cfg.proxyMode;
+  $('cfgSys').value=cfg.sysPrompt;$('cfgTemp').value=cfg.temp;$('cfgMax').value=cfg.maxTok;$('cfgTopP').value=cfg.topP;
+  $('cfgZepOn').checked=cfg.zep.enabled;$('cfgZepKey').value=cfg.zep.key;
+  applyTheme();renderModels();renderSessions();renderComposio();
+  sessions.length?openSession(sessions[0].id):newChat();
+  loadTools(false);refreshComposio(false);
 }
-
-function saveSettings() {
-  cfg.baseUrl = $('cfgBase').value.trim();
-  cfg.apiKey = $('cfgKey').value.trim();
-  cfg.authType = $('cfgAuth').value;
-  cfg.proxyMode = $('cfgProxy').checked;
-  cfg.sysPrompt = $('cfgSys').value;
-  cfg.temp = $('cfgTemp').value;
-  cfg.maxTok = $('cfgMax').value;
-  cfg.topP = $('cfgTopP').value;
-  cfg.zep = { enabled: $('cfgZepOn').checked, key: $('cfgZepKey').value.trim() };
-  cfg.chatPath = null;
-  const u = $('cfgTools').value.trim().replace(/\/+$/, '');
-  const at = $('cfgBeAuth').value,
-    ak = $('cfgBeKey').value.trim();
-  if (u !== cfg.backend.url || at !== cfg.backend.authType || ak !== cfg.backend.authKey) {
-    cfg.backend = { url: u, authType: at, authKey: ak, list: null, execV2: null };
-    loadTools(false);
-  }
-  const cm = $('cfgCustomModel').value.trim();
-  if (cm) { if (!cfg.models.includes(cm)) cfg.models.push(cm);
-    cfg.model = cm;
-    $('cfgCustomModel').value = ''; }
-  persist();
-  renderModels();
-  settings.classList.remove('open');
-  toast('✅ تم الحفظ');
+function saveSettings(){
+  cfg.baseUrl=$('cfgBase').value.trim();cfg.apiKey=$('cfgKey').value.trim();cfg.authType=$('cfgAuth').value;
+  cfg.proxyMode=$('cfgProxy').checked;
+  cfg.sysPrompt=$('cfgSys').value;cfg.temp=$('cfgTemp').value;cfg.maxTok=$('cfgMax').value;cfg.topP=$('cfgTopP').value;
+  cfg.zep={enabled:$('cfgZepOn').checked,key:$('cfgZepKey').value.trim()};
+  cfg.chatPath=null;
+  const u=$('cfgTools').value.trim().replace(/\/+$/,'');
+  const at=$('cfgBeAuth').value,ak=$('cfgBeKey').value.trim();
+  if(u!==cfg.backend.url||at!==cfg.backend.authType||ak!==cfg.backend.authKey){
+    cfg.backend={url:u,authType:at,authKey:ak,list:null,execV2:null};loadTools(false);}
+  const cm=$('cfgCustomModel').value.trim();
+  if(cm){if(!cfg.models.includes(cm))cfg.models.push(cm);cfg.model=cm;$('cfgCustomModel').value='';}
+  persist();renderModels();settings.classList.remove('open');toast('✅ تم الحفظ');
 }
-
-function openSettings() { settings.classList.add('open');
-  closeAll(); }
-
-function newChat() {
-  const s = { id: Date.now() + '', title: 'محادثة جديدة', messages: [], artifacts: [] };
-  sessions.unshift(s);
-  curId = s.id;
-  persist();
-  renderSessions();
-  renderChat();
-  closeAll();
-}
-
-function openSession(id) { curId = id;
-  renderSessions();
-  renderChat();
-  closeAll(); }
-
-function delSession(e, id) { e.stopPropagation();
-  sessions = sessions.filter(s => s.id !== id);
-  persist();
-  curId === id ? (sessions.length ? openSession(sessions[0].id) : newChat()) : renderSessions(); }
-
-function renderSessions() {
-  $('sessions').innerHTML = sessions.map(s =>
-    `<div class="sess ${s.id === curId ? 'active' : ''}" onclick="openSession('${s.id}')">💬 <span>${esc(s.title)}</span>
-   <button class="del" onclick="delSession(event,'${s.id}')">🗑</button></div>`
-  ).join('');
-}
-
-function updateCtx() { const s = cur();
-  if (!s) return;
-  let ch = (cfg.sysPrompt || '').length;
-  for (const m of s.messages) ch += JSON.stringify(m.content || '').length;
-  const t = Math.round(ch / 3.6);
-  $('ctxVal').textContent = t > 1000 ? (t / 1000).toFixed(1) + 'k' : t; }
+function openSettings(){settings.classList.add('open');closeAll();}
+function newChat(){const s={id:Date.now()+'',title:'محادثة جديدة',messages:[],artifacts:[]};sessions.unshift(s);curId=s.id;persist();renderSessions();renderChat();closeAll();}
+function openSession(id){curId=id;renderSessions();renderChat();closeAll();}
+function delSession(e,id){e.stopPropagation();sessions=sessions.filter(s=>s.id!==id);persist();
+  curId===id?(sessions.length?openSession(sessions[0].id):newChat()):renderSessions();}
+function renderSessions(){$('sessions').innerHTML=sessions.map(s=>
+  `<div class="sess ${s.id===curId?'active':''}" onclick="openSession('${s.id}')">💬 <span>${esc(s.title)}</span>
+   <button class="del" onclick="delSession(event,'${s.id}')">🗑</button></div>`).join('');}
+function updateCtx(){const s=cur();if(!s)return;
+  let ch=(cfg.sysPrompt||'').length;
+  for(const m of s.messages)ch+=JSON.stringify(m.content||'').length;
+  const t=Math.round(ch/3.6);
+  $('ctxVal').textContent=t>1000?(t/1000).toFixed(1)+'k':t;}
 
 /* ============ 10) التمرير الذكي ============ */
-let chatFollow = true,
-  cpFollow = true,
-  liveActive = false;
-$('chat').addEventListener('scroll', () => {
-  const c = $('chat');
-  chatFollow = c.scrollTop + c.clientHeight >= c.scrollHeight - 60;
-  $('chatFollowBtn').style.display = (!chatFollow && busy) ? 'block' : 'none';
-});
-
-function chatResume() { chatFollow = true;
-  scrollBottom(true);
-  $('chatFollowBtn').style.display = 'none'; }
-
-function scrollBottom(force) { const c = $('chat');
-  if (force || chatFollow) c.scrollTop = c.scrollHeight; }
-
-$('cpScroll').addEventListener('scroll', () => {
-  const el = $('cpScroll');
-  cpFollow = el.scrollTop + el.clientHeight >= el.scrollHeight - 40;
-  $('cpFollowBtn').style.display = (!cpFollow && liveActive) ? 'block' : 'none';
-});
-
-function cpResume() { cpFollow = true;
-  $('cpScroll').scrollTop = $('cpScroll').scrollHeight;
-  $('cpFollowBtn').style.display = 'none'; }
+let chatFollow=true,cpFollow=true,liveActive=false;
+$('chat').addEventListener('scroll',()=>{
+  const c=$('chat');chatFollow=c.scrollTop+c.clientHeight>=c.scrollHeight-60;
+  $('chatFollowBtn').style.display=(!chatFollow&&busy)?'block':'none';});
+function chatResume(){chatFollow=true;scrollBottom(true);$('chatFollowBtn').style.display='none';}
+function scrollBottom(force){const c=$('chat');if(force||chatFollow)c.scrollTop=c.scrollHeight;}
+$('cpScroll').addEventListener('scroll',()=>{
+  const el=$('cpScroll');cpFollow=el.scrollTop+el.clientHeight>=el.scrollHeight-40;
+  $('cpFollowBtn').style.display=(!cpFollow&&liveActive)?'block':'none';});
+function cpResume(){cpFollow=true;$('cpScroll').scrollTop=$('cpScroll').scrollHeight;$('cpFollowBtn').style.display='none';}
 
 /* ============ 11) Markdown + Artifacts ============ */
-function md(s, sess) {
-  const codeBlocks = [];
-  const withPlaceholders = s.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
-    const i = codeBlocks.length;
-    codeBlocks.push({ lang: (lang || 'text').toLowerCase(), code });
-    return `\u0000CB${i}\u0000`;
+function md(s,sess){
+  // ★ إصلاح جوهري: كان يُطبَّق esc() على النص كاملاً أولاً، ثم تُستخرج كتلة
+  // الكود من النص المُهرَّب — فيُخزَّن داخل sess.artifacts نص "مُهرَّب مرتين"
+  // (&lt;div&gt; بدل <div>). هذا كان يُفسد عرض الكود في نافذة الأكواد
+  // (textContent يعرض الرموز الحرفية &lt; &gt; بدل < >) والمعاينة الحية داخل
+  // iframe (srcdoc لا يُعيد تفسير النص كعناصر HTML فعلية بل كنص عادي).
+  // الإصلاح: نستخرج كتل الكود من النص الخام أولاً ونستبدلها بعناصر نائبة
+  // (لا تحتوي أحرفاً خاصة فتمر عبر esc() سليمة)، ثم نُهرِّب باقي النص العادي،
+  // ثم نستبدل العناصر النائبة بالمخرجات النهائية — مع تخزين الكود الخام غير
+  // المُهرَّب في الـ Artifact، وتهريبه فقط عند عرضه كنص عادي داخل الدردشة.
+  const codeBlocks=[];
+  const withPlaceholders=s.replace(/```(\w*)\n?([\s\S]*?)```/g,(_,lang,code)=>{
+    const i=codeBlocks.length;
+    codeBlocks.push({lang:(lang||'text').toLowerCase(),code});
+    return`\u0000CB${i}\u0000`;
   });
-  let h = esc(withPlaceholders);
-  h = h.replace(/\u0000CB(\d+)\u0000/g, (_, i) => {
-    const { lang, code } = codeBlocks[+i];
-    if (sess && qualifiesArtifact(lang, code.length)) {
-      const id = 'a' + hash(code);
-      let a = sess.artifacts.find(x => x.id === id);
-      if (!a) { a = { id, kind: 'code', lang, content: code, title: lang === 'html' ? 'index.html' : (lang === 'svg' ?
-            'image.svg' : 'file.' + lang) };
-        sess.artifacts.push(a); }
-      return `<button class="artifact" onclick="openArtifact('${id}')"><span class="aic">📄</span>
+  let h=esc(withPlaceholders);
+  h=h.replace(/\u0000CB(\d+)\u0000/g,(_,i)=>{
+    const{lang,code}=codeBlocks[+i];
+    if(sess&&qualifiesArtifact(lang,code.length)){
+      const id='a'+hash(code);
+      let a=sess.artifacts.find(x=>x.id===id);
+      if(!a){a={id,kind:'code',lang,content:code,title:lang==='html'?'index.html':(lang==='svg'?'image.svg':'file.'+lang)};sess.artifacts.push(a);}
+      return`<button class="artifact" onclick="openArtifact('${id}')"><span class="aic">📄</span>
         <span class="at"><b>${esc(a.title)}</b>
-        <small>${lang.toUpperCase()} · ${code.length} حرف · اضغط للعرض</small></span></button>`;
-    }
-    return `<div class="codewrap"><div class="chead"><span>${esc(lang)}</span>
+        <small>${lang.toUpperCase()} · ${code.length} حرف · اضغط للعرض</small></span></button>`;}
+    return`<div class="codewrap"><div class="chead"><span>${esc(lang)}</span>
       <button onclick="navigator.clipboard.writeText(this.closest('.codewrap').querySelector('pre').textContent);toast('📋 تم النسخ')">📋 نسخ</button></div>
-      <pre>${esc(code)}</pre></div>`;
-  });
-  h = h.replace(/`([^`\n]+)`/g, '<code class="inline">$1</code>');
-  h = h.replace(/^### (.*)$/gm, '<h3>$1</h3>').replace(/^## (.*)$/gm, '<h2>$1</h2>').replace(/^# (.*)$/gm, '<h1>$1</h1>');
-  h = h.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
-  h = h.replace(/^&gt; (.*)$/gm, '<blockquote>$1</blockquote>');
-  h = h.replace(/^[-*] (.*)$/gm, '<li>$1</li>').replace(/(<li>[\s\S]*?<\/li>)(?!<li>)/g, '<ul>$1</ul>');
-  h = h.replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
-  return h.replace(/\n/g, '<br>').replace(/<br>(<(?:pre|div|h\d|ul|blockquote|button))/g, '$1').replace(
-    /(<\/(?:pre|div|h\d|ul|blockquote|button)>)<br>/g, '$1');
+      <pre>${esc(code)}</pre></div>`;});
+  h=h.replace(/`([^`\n]+)`/g,'<code class="inline">$1</code>');
+  h=h.replace(/^### (.*)$/gm,'<h3>$1</h3>').replace(/^## (.*)$/gm,'<h2>$1</h2>').replace(/^# (.*)$/gm,'<h1>$1</h1>');
+  h=h.replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>');
+  h=h.replace(/^&gt; (.*)$/gm,'<blockquote>$1</blockquote>');
+  h=h.replace(/^[-*] (.*)$/gm,'<li>$1</li>').replace(/(<li>[\s\S]*?<\/li>)(?!<li>)/g,'<ul>$1</ul>');
+  h=h.replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g,'<a href="$2" target="_blank">$1</a>');
+  return h.replace(/\n/g,'<br>').replace(/<br>(<(?:pre|div|h\d|ul|blockquote|button))/g,'$1').replace(/(<\/(?:pre|div|h\d|ul|blockquote|button)>)<br>/g,'$1');
 }
-
-function actionsHtml(role, idx) {
+function actionsHtml(role,idx){
   return `<div class="mactions">
     <button onclick="navigator.clipboard.writeText(this.closest('.msg').dataset.raw||'');toast('📋 تم النسخ')">📋 نسخ</button>
-    ${role === 'user'
-      ? `<button onclick="editMsg(${idx})">✏️ تعديل</button>`
-      : `<button onclick="regenFrom(${idx})">🔄 إعادة</button>`}
+    ${role==='user'
+      ?`<button onclick="editMsg(${idx})">✏️ تعديل</button>`
+      :`<button onclick="regenFrom(${idx})">🔄 إعادة</button>`}
   </div>`;
 }
-
-function addBubble(role, text, fileNames, idx) {
-  const w = $('chatInner');
-  if (w.querySelector('.welcome')) w.innerHTML = '';
-  const d = document.createElement('div');
-  d.className = 'msg ' + role;
-  d.dataset.raw = text;
-  d.innerHTML = (role === 'bot' ? md(text, cur()) : esc(text).replace(/\n/g, '<br>')) +
-    (fileNames?.length ? `<div class="files">📎 ${fileNames.map(esc).join('، ')}</div>` : '') +
-    (idx != null ? actionsHtml(role, idx) : '');
-  w.appendChild(d);
-  scrollBottom(role === 'user');
-  return d;
+function addBubble(role,text,fileNames,idx){
+  const w=$('chatInner');if(w.querySelector('.welcome'))w.innerHTML='';
+  const d=document.createElement('div');d.className='msg '+role;
+  d.dataset.raw=text;
+  d.innerHTML=(role==='bot'?md(text,cur()):esc(text).replace(/\n/g,'<br>'))+
+    (fileNames?.length?`<div class="files">📎 ${fileNames.map(esc).join('، ')}</div>`:'')+
+    (idx!=null?actionsHtml(role,idx):'');
+  w.appendChild(d);scrollBottom(role==='user');return d;
 }
-
-function renderChat() {
-  const s = cur(),
-    w = $('chatInner');
-  w.innerHTML = '';
-  if (!s || !s.messages.some(m => m.role === 'user' || (m.role === 'assistant' && m.content))) {
-    w.innerHTML =
-      `<div class="welcome"><div class="big">✳️</div><h2>كيف يمكنني مساعدتك اليوم؟</h2>
-    <p>اختر النموذج · فعّل الأدوات من ＋ · اختبر أي أداة بزر 🧪 · شخّص الاتصال من 🩺</p></div>`;
-    updateCtx();
-    return;
-  }
-  s.messages.forEach((m, idx) => {
-    if (m.role === 'user') addBubble('user', typeof m.content === 'string' ? m.content : (m.content.find(c => c.type ===
-        'text')?.text || ''), m._files, idx);
-    else if (m.role === 'assistant' && m.content) addBubble('bot', m.content, null, idx);
+function renderChat(){
+  const s=cur(),w=$('chatInner');w.innerHTML='';
+  if(!s||!s.messages.some(m=>m.role==='user'||(m.role==='assistant'&&m.content))){
+    w.innerHTML=`<div class="welcome"><div class="big">✳️</div><h2>كيف يمكنني مساعدتك اليوم؟</h2>
+    <p>اختر النموذج · فعّل الأدوات من ＋ · اختبر أي أداة بزر 🧪 · شخّص الاتصال من 🩺</p></div>`;updateCtx();return;}
+  s.messages.forEach((m,idx)=>{
+    if(m.role==='user')addBubble('user',typeof m.content==='string'?m.content:(m.content.find(c=>c.type==='text')?.text||''),m._files,idx);
+    else if(m.role==='assistant'&&m.content)addBubble('bot',m.content,null,idx);
   });
-  updateCtx();
-  chatFollow = true;
-  scrollBottom(true);
+  updateCtx();chatFollow=true;scrollBottom(true);
 }
-
-function attachBotActions(idx) {
-  const s = cur();
-  const els = [...$('chatInner').querySelectorAll('.msg.bot')];
-  const d = els[els.length - 1];
-  if (!d || d.querySelector('.mactions')) return;
-  d.dataset.raw = String(s.messages[idx]?.content || '');
-  d.insertAdjacentHTML('beforeend', actionsHtml('bot', idx));
+function attachBotActions(idx){
+  const s=cur();
+  const els=[...$('chatInner').querySelectorAll('.msg.bot')];
+  const d=els[els.length-1];if(!d||d.querySelector('.mactions'))return;
+  d.dataset.raw=String(s.messages[idx]?.content||'');
+  d.insertAdjacentHTML('beforeend',actionsHtml('bot',idx));
 }
-
-function editMsg(idx) {
-  if (busy) return;
-  const s = cur(),
-    m = s.messages[idx];
-  if (!m) return;
-  const text = typeof m.content === 'string' ? m.content : (m.content.find(c => c.type === 'text')?.text || '');
-  $('input').value = text;
-  input.dispatchEvent(new Event('input'));
-  s.messages = s.messages.slice(0, idx);
-  persist();
-  renderChat();
-  $('input').focus();
+function editMsg(idx){
+  if(busy)return;
+  const s=cur(),m=s.messages[idx];if(!m)return;
+  const text=typeof m.content==='string'?m.content:(m.content.find(c=>c.type==='text')?.text||'');
+  $('input').value=text;input.dispatchEvent(new Event('input'));
+  s.messages=s.messages.slice(0,idx);
+  persist();renderChat();$('input').focus();
 }
-
-async function regenFrom(idx) {
-  if (busy) return;
-  const s = cur();
-  let u = idx;
-  while (u >= 0 && s.messages[u].role !== 'user') u--;
-  if (u < 0) return;
-  s.messages = s.messages.slice(0, u + 1);
-  persist();
-  renderChat();
+async function regenFrom(idx){
+  if(busy)return;
+  const s=cur();
+  let u=idx;while(u>=0&&s.messages[u].role!=='user')u--;
+  if(u<0)return;
+  s.messages=s.messages.slice(0,u+1);
+  persist();renderChat();
   await runAgent(s);
 }
 
 /* ============ 12) Code Panel + كتابة حية + معاينة محسّنة ============ */
-const live = { timer: null, lastPrev: 0, code: '', lang: 'html', prevable: false, active: false, userClosed: false };
-const ARTIFACT_MIN_LEN = 150;
-
-function qualifiesArtifact(lang, len) { return lang === 'html' || lang === 'svg' || len >= ARTIFACT_MIN_LEN; }
-
-function isPreviewable(l) { return l === 'html' || l === 'svg'; }
-
-function wrapPreviewHTML(code, lang) {
-  const errScript =
-    `<script>(function(){
+const live={timer:null,lastPrev:0,code:'',lang:'html',prevable:false,active:false,userClosed:false};
+// ★ الحد الأدنى لطول كتلة الكود (بالأحرف) كي تُعامل كـ Artifact حقيقي يُفتح
+// تلقائياً في اللوحة الجانبية. يُستخدم هذا الشرط نفسه في مكانين: أثناء
+// الكتابة الحية (streamChat) وفي التصيير النهائي (md) — كانا سابقاً بمعيارين
+// مختلفين (الكتابة الحية تفتح اللوحة لأي كود مهما كان قصيراً، بينما md لا
+// يُنشئ Artifact إلا لكود HTML/SVG أو أطول من 500 حرف)، وهذا التضارب هو
+// بالضبط سبب ظهور الكود أحياناً في اللوحة أثناء الكتابة ثم انتهائه كنص عادي
+// داخل فقاعة الدردشة (بلا Artifact) بعد اكتمال الرد.
+const ARTIFACT_MIN_LEN=150;
+function qualifiesArtifact(lang,len){return lang==='html'||lang==='svg'||len>=ARTIFACT_MIN_LEN;}
+function isPreviewable(l){return l==='html'||l==='svg';}
+function wrapPreviewHTML(code,lang){
+  const errScript=`<script>(function(){
     function report(msg){try{parent.postMessage({__previewError:true,message:String(msg).slice(0,500)},'*');}catch(e){}}
     window.addEventListener('error',function(e){report((e.message||'خطأ غير معروف')+' — سطر '+e.lineno);});
     window.addEventListener('unhandledrejection',function(e){report('وعد مرفوض: '+((e.reason&&e.reason.message)||e.reason));});
     var oe=console.error;console.error=function(){report(Array.prototype.slice.call(arguments).join(' '));oe.apply(console,arguments);};
   })();<\/script>`;
-  if (lang === 'svg') {
-    return `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;height:100%;display:flex;align-items:center;justify-content:center;background:#fff}svg{max-width:100%;max-height:100%}</style></head><body>${code}${errScript}</body></html>`;
+  if(lang==='svg'){
+    return`<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;height:100%;display:flex;align-items:center;justify-content:center;background:#fff}svg{max-width:100%;max-height:100%}</style></head><body>${code}${errScript}</body></html>`;
   }
-  if (/<head[\s>]/i.test(code)) return code.replace(/<head[^>]*>/i, m => m + errScript);
-  if (/<html[\s>]/i.test(code)) return code.replace(/<html[^>]*>/i, m => m + '<head>' + errScript + '</head>');
-  return errScript + code;
+  if(/<head[\s>]/i.test(code))return code.replace(/<head[^>]*>/i,m=>m+errScript);
+  if(/<html[\s>]/i.test(code))return code.replace(/<html[^>]*>/i,m=>m+'<head>'+errScript+'</head>');
+  return errScript+code;
 }
-
-function showPrevError(msg) { const b = $('prevErrBar');
-  b.textContent = '⚠ ' + msg + '  (اضغط للإخفاء)';
-  b.style.display = 'block'; }
-
-function hidePrevError() { const b = $('prevErrBar');
-  b.style.display = 'none';
-  b.textContent = ''; }
-window.addEventListener('message', e => { if (e.data && e.data.__previewError) showPrevError(e.data.message); });
-
-function setPreviewDoc(html) { $('cpFrame').removeAttribute('src');
-  $('cpFrame').srcdoc = html; }
-
-function setPreviewUrl(url) { $('cpFrame').removeAttribute('srcdoc');
-  $('cpFrame').src = url; }
-
-function reloadPreview() {
+function showPrevError(msg){const b=$('prevErrBar');b.textContent='⚠ '+msg+'  (اضغط للإخفاء)';b.style.display='block';}
+function hidePrevError(){const b=$('prevErrBar');b.style.display='none';b.textContent='';}
+window.addEventListener('message',e=>{if(e.data&&e.data.__previewError)showPrevError(e.data.message);});
+// ★ iframe العرض يُستخدم بطريقتين متعارضتين: srcdoc (لعرض HTML/SVG مُولَّد
+// محلياً) أو src (لعرض ملف خارجي حقيقي كـ PDF/صورة عبر رابطه). إن بقي
+// الخاصيتان معاً، يتغلّب src ويتجاهل المتصفح srcdoc بصمت. هاتان الدالتان
+// تضمنان مسح الأخرى دائماً عند التبديل بينهما.
+function setPreviewDoc(html){$('cpFrame').removeAttribute('src');$('cpFrame').srcdoc=html;}
+function setPreviewUrl(url){$('cpFrame').removeAttribute('srcdoc');$('cpFrame').src=url;}
+function reloadPreview(){
   hidePrevError();
-  if (curArtifact && curArtifact.kind === 'file') {
-    if (curArtifact.embeddable) setPreviewUrl(curArtifact.fileUrl);
+  if(curArtifact&&curArtifact.kind==='file'){
+    if(curArtifact.embeddable)setPreviewUrl(curArtifact.fileUrl);
     else toast('لا تتوفر معاينة داخلية لهذا النوع — استخدم ⬈ للفتح في تبويب جديد');
     return;
   }
-  const code = curArtifact ? curArtifact.content : live.code;
-  const lang = curArtifact ? curArtifact.lang : (live.lang || 'html');
-  if (code) setPreviewDoc(wrapPreviewHTML(code, lang));
+  const code=curArtifact?curArtifact.content:live.code;
+  const lang=curArtifact?curArtifact.lang:(live.lang||'html');
+  if(code)setPreviewDoc(wrapPreviewHTML(code,lang));
   else toast('لا يوجد محتوى للمعاينة');
 }
-
-function openPreviewNewTab() {
-  if (curArtifact && curArtifact.kind === 'file') {
-    if (!curArtifact.fileUrl) return toast('لا يوجد رابط لهذا الملف');
-    window.open(curArtifact.fileUrl, '_blank');
-    return;
+function openPreviewNewTab(){
+  if(curArtifact&&curArtifact.kind==='file'){
+    if(!curArtifact.fileUrl)return toast('لا يوجد رابط لهذا الملف');
+    window.open(curArtifact.fileUrl,'_blank');return;
   }
-  const code = curArtifact ? curArtifact.content : live.code;
-  if (!code) return toast('لا يوجد محتوى للمعاينة');
-  const lang = curArtifact ? curArtifact.lang : (live.lang || 'html');
-  const w = window.open('about:blank', '_blank');
-  if (w) { w.document.write(wrapPreviewHTML(code, lang));
-    w.document.close(); }
+  const code=curArtifact?curArtifact.content:live.code;
+  if(!code)return toast('لا يوجد محتوى للمعاينة');
+  const lang=curArtifact?curArtifact.lang:(live.lang||'html');
+  const w=window.open('about:blank','_blank');
+  if(w){w.document.write(wrapPreviewHTML(code,lang));w.document.close();}
 }
-
-function liveWrite(lang, code) {
-  const prevable = isPreviewable(lang);
-  const starting = !live.active;
-  live.active = true;
-  liveActive = true;
-  live.code = code;
-  live.lang = lang;
-  live.prevable = prevable;
-  if (starting) {
-    live.userClosed = false;
-    codePanel.classList.add('open');
-    cpFollow = true;
-    setView(prevable ? 'split' : 'code');
-    live.lastPrev = 0;
-    hidePrevError();
-    if (prevable) setPreviewDoc(wrapPreviewHTML(code || '', 'html'));
+function liveWrite(lang,code){
+  const prevable=isPreviewable(lang);
+  const starting=!live.active;
+  live.active=true;liveActive=true;live.code=code;live.lang=lang;live.prevable=prevable;
+  if(starting){
+    // ★ بداية كتلة كود جديدة فعلياً — سياق جديد، فنُعيد ضبط "أُغلقت يدوياً"
+    // حتى يُسمح بالفتح التلقائي من جديد لهذه الكتلة.
+    live.userClosed=false;
+    codePanel.classList.add('open');cpFollow=true;
+    setView(prevable?'split':'code');
+    live.lastPrev=0;hidePrevError();
+    if(prevable)setPreviewDoc(wrapPreviewHTML(code||'','html'));
   }
-  curArtifact = null;
-  $('cpTitle').textContent = '✍️ يكتب الكود (' + lang + ')...';
-  $('cpCode').textContent = code;
-  if (cpFollow) { const el = $('cpScroll');
-    el.scrollTop = el.scrollHeight; }
-  if (live.userClosed) return;
-  if (prevable) {
-    const push = () => { live.lastPrev = Date.now();
-      hidePrevError();
-      setPreviewDoc(wrapPreviewHTML(live.code, lang)); };
+  curArtifact=null;
+  $('cpTitle').textContent='✍️ يكتب الكود ('+lang+')...';
+  $('cpCode').textContent=code;
+  if(cpFollow){const el=$('cpScroll');el.scrollTop=el.scrollHeight;}
+  // ★ الإصلاح الجوهري لمشكلة "تفتح بالإجبار ولا تُغلق": إن أغلق المستخدم
+  // اللوحة يدوياً أثناء بث نفس الكتلة، لا نُعيد فتحها ولا نُحدّث المعاينة مع
+  // كل حرف جديد يصل من النموذج. cpCode/cpTitle تبقى محدَّثة بصمت في الخلفية
+  // (بلا أي أثر بصري لأن العرض مغلق) بحيث تظهر صحيحة فوراً إن أعاد المستخدم
+  // فتح اللوحة يدوياً لاحقاً.
+  if(live.userClosed)return;
+  if(prevable){
+    const push=()=>{live.lastPrev=Date.now();hidePrevError();setPreviewDoc(wrapPreviewHTML(live.code,lang));};
     clearTimeout(live.timer);
-    if (Date.now() - live.lastPrev > 700) push();
-    else live.timer = setTimeout(push, 700);
+    if(Date.now()-live.lastPrev>700)push();else live.timer=setTimeout(push,700);
   }
 }
-
-function liveEnd() {
+function liveEnd(){
   clearTimeout(live.timer);
-  if (live.active && live.prevable && live.code) { hidePrevError();
-    setPreviewDoc(wrapPreviewHTML(live.code, live.lang)); }
-  live.active = false;
-  liveActive = false;
-  live.userClosed = false;
-  $('cpFollowBtn').style.display = 'none';
+  if(live.active&&live.prevable&&live.code){hidePrevError();setPreviewDoc(wrapPreviewHTML(live.code,live.lang));}
+  live.active=false;liveActive=false;live.userClosed=false;$('cpFollowBtn').style.display='none';
 }
-
-function parseLive(full) {
-  const parts = full.split('```');
-  if (parts.length % 2 === 0) {
-    const seg = parts[parts.length - 1],
-      nl = seg.indexOf('\n');
-    if (nl < 0) return { inside: true, lang: 'text', code: '' };
-    return { inside: true, lang: (seg.slice(0, nl).trim() || 'text').toLowerCase(), code: seg.slice(nl + 1) };
-  }
-  return { inside: false };
+function parseLive(full){
+  const parts=full.split('```');
+  if(parts.length%2===0){
+    const seg=parts[parts.length-1],nl=seg.indexOf('\n');
+    if(nl<0)return{inside:true,lang:'text',code:''};
+    return{inside:true,lang:(seg.slice(0,nl).trim()||'text').toLowerCase(),code:seg.slice(nl+1)};}
+  return{inside:false};
 }
-
-function openArtifact(id) {
-  const a = cur()?.artifacts.find(x => x.id === id);
-  if (!a) { toast('❌ تعذّر العثور على هذا العنصر (ربما حُذف أو لم يعد محفوظاً)'); return; }
-  liveEnd();
-  curArtifact = a;
-  hidePrevError();
-  $('cpTitle').textContent = a.title;
-  if (a.kind === 'file') {
-    $('cpCode').textContent =
-      `📁 ${a.title}\n\nالنوع: ${a.fileType||'غير معروف'}\nالأداة: ${a.toolName||'—'}\nالرابط: ${a.fileUrl}\n\n` +
-      (a.embeddable ? 'تُعرض معاينة الملف في اللوحة المقابلة.' :
-        'لا تتوفر معاينة داخلية لهذا النوع من الملفات — استخدم زر ⬈ لفتحه في تبويب جديد، أو ⬇ لتنزيله.');
-    if (a.embeddable) { setPreviewUrl(a.fileUrl);
-      setView('split'); } else {
-      setPreviewDoc(
-        '<body style="font-family:sans-serif;color:#888;display:flex;align-items:center;justify-content:center;height:100vh;text-align:center;padding:20px">لا توجد معاينة داخلية لهذا النوع من الملفات.<br>استخدم ⬈ لفتحه في تبويب جديد.</body>'
-        );
-      setView('code'); }
+// ★ إصلاح جوهري: كانت هناك آليتان منفصلتان لعرض "الملفات" في الدردشة —
+// بطاقات الكود (openArtifact عبر اللوحة) وبطاقات ملفات الأدوات (كانت
+// <a href> عادية تفتح في المتصفح مباشرة، متجاوزة اللوحة كلياً). كلتاهما
+// تستخدمان نفس صنف CSS ".artifact" فتبدوان متطابقتين بصرياً لكن تتصرفان
+// بشكل مختلف تماماً — وهذا بالضبط ما كان يجعل "الارتيفاكت" و"نافذة الأكواد"
+// ليسا نفس الشيء من منظور المستخدم. الآن كل شيء (كود أو ملف) هو Artifact
+// حقيقي مُسجَّل في sess.artifacts ويُفتح دائماً عبر openArtifact() في نفس
+// اللوحة، والدالة تفرّع داخلياً حسب a.kind.
+function openArtifact(id){
+  const a=cur()?.artifacts.find(x=>x.id===id);
+  if(!a){toast('❌ تعذّر العثور على هذا العنصر (ربما حُذف أو لم يعد محفوظاً)');return;}
+  liveEnd();curArtifact=a;hidePrevError();
+  $('cpTitle').textContent=a.title;
+  if(a.kind==='file'){
+    $('cpCode').textContent=
+      `📁 ${a.title}\n\nالنوع: ${a.fileType||'غير معروف'}\nالأداة: ${a.toolName||'—'}\nالرابط: ${a.fileUrl}\n\n`+
+      (a.embeddable?'تُعرض معاينة الملف في اللوحة المقابلة.':'لا تتوفر معاينة داخلية لهذا النوع من الملفات — استخدم زر ⬈ لفتحه في تبويب جديد، أو ⬇ لتنزيله.');
+    if(a.embeddable){setPreviewUrl(a.fileUrl);setView('split');}
+    else{setPreviewDoc('<body style="font-family:sans-serif;color:#888;display:flex;align-items:center;justify-content:center;height:100vh;text-align:center;padding:20px">لا توجد معاينة داخلية لهذا النوع من الملفات.<br>استخدم ⬈ لفتحه في تبويب جديد.</body>');setView('code');}
     codePanel.classList.add('open');
     return;
   }
-  $('cpCode').textContent = a.content;
-  const prev = isPreviewable(a.lang);
-  if (prev) setPreviewDoc(wrapPreviewHTML(a.content, a.lang));
-  else setPreviewDoc(
-    '<body style="font-family:sans-serif;color:#888;display:flex;align-items:center;justify-content:center;height:100vh">لا توجد معاينة لهذا النوع</body>'
-    );
-  setView(prev ? 'split' : 'code');
-  codePanel.classList.add('open');
+  $('cpCode').textContent=a.content;
+  const prev=isPreviewable(a.lang);
+  if(prev)setPreviewDoc(wrapPreviewHTML(a.content,a.lang));
+  else setPreviewDoc('<body style="font-family:sans-serif;color:#888;display:flex;align-items:center;justify-content:center;height:100vh">لا توجد معاينة لهذا النوع</body>');
+  setView(prev?'split':'code');codePanel.classList.add('open');
 }
-
-function setView(v) { codePanel.dataset.view = v;
-  document.querySelectorAll('.cp-tabs button').forEach(b => b.classList.toggle('on', b.dataset.v === v)); }
-
-function closePanel() {
-  codePanel.classList.remove('open', 'full');
-  if (live.active) live.userClosed = true;
+function setView(v){codePanel.dataset.view=v;document.querySelectorAll('.cp-tabs button').forEach(b=>b.classList.toggle('on',b.dataset.v===v));}
+function closePanel(){
+  codePanel.classList.remove('open','full');
+  // ★ إصلاح جذري لمشكلة "تنبثق بالإجبار ولا تُغلق": الكود القديم كان يستدعي
+  // liveEnd() هنا، وهي تُصفّر live.active إلى false. لكن البث لا يزال جارياً
+  // (نفس كتلة الكود لم تنتهِ بعد)، فحين تصل الدفعة (chunk) التالية من الحروف
+  // من النموذج، تستدعي liveWrite() من جديد وترى live.active=false فتظن أن
+  // كتلة كود "بدأت للتو" وتُعيد فتح اللوحة تلقائياً فوراً — أي أن أي إغلاق
+  // يدوي أثناء الكتابة الحية كان يُلغى خلال أجزاء من الثانية.
+  // الإصلاح: لا نُنهي التتبع الحي هنا؛ فقط نُسجّل أن المستخدم أغلق اللوحة
+  // يدوياً (live.userClosed) لكي تحترم liveWrite هذه الرغبة ولا تُعيد فتح
+  // اللوحة أو تدفع تحديثات معاينة لبقية هذه الكتلة/الرسالة، مع إيقاف أي
+  // مؤقّت معاينة مُجدوَل سلفاً.
+  if(live.active)live.userClosed=true;
   clearTimeout(live.timer);
 }
-
-function dlArtifact() {
-  if (!curArtifact) return;
-  if (curArtifact.kind === 'file') {
-    if (!curArtifact.fileUrl) return toast('لا يوجد رابط لهذا الملف');
-    const a = document.createElement('a');
-    a.href = curArtifact.fileUrl;
-    a.download = curArtifact.title;
-    a.target = '_blank';
-    a.rel = 'noopener';
-    a.click();
-    toast('⬇ يفتح رابط الملف...');
+function dlArtifact(){
+  if(!curArtifact)return;
+  if(curArtifact.kind==='file'){
+    if(!curArtifact.fileUrl)return toast('لا يوجد رابط لهذا الملف');
+    const a=document.createElement('a');a.href=curArtifact.fileUrl;a.download=curArtifact.title;a.target='_blank';a.rel='noopener';a.click();
+    toast('⬇ يفتح رابط الملف...');return;
+  }
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([curArtifact.content]));a.download=curArtifact.title;a.click();toast('⬇ تم التنزيل');
+}
+// ★ زر نسخ الكود في نافذة الأكواد: يعمل مع Artifact مفتوح (كود) أو أثناء
+// الكتابة الحية قبل اكتمال الرد (live.code)، ويعتمد على نفس النص المعروض
+// فعلياً في cpCode حتى يبقى متطابقاً دائماً مع ما يراه المستخدم.
+async function copyArtifactCode(){
+  if(curArtifact&&curArtifact.kind==='file'){
+    if(!curArtifact.fileUrl)return toast('لا يوجد شيء لنسخه');
+    try{await navigator.clipboard.writeText(curArtifact.fileUrl);toast('📋 تم نسخ رابط الملف');}
+    catch(e){toast('❌ تعذّر النسخ: '+e.message);}
     return;
   }
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([curArtifact.content]));
-  a.download = curArtifact.title;
-  a.click();
-  toast('⬇ تم التنزيل');
+  const code=curArtifact?curArtifact.content:live.code;
+  if(!code)return toast('لا يوجد كود لنسخه');
+  try{await navigator.clipboard.writeText(code);toast('📋 تم نسخ الكود');}
+  catch(e){toast('❌ تعذّر النسخ: '+e.message);}
 }
-
-async function copyArtifactCode() {
-  if (curArtifact && curArtifact.kind === 'file') {
-    if (!curArtifact.fileUrl) return toast('لا يوجد شيء لنسخه');
-    try { await navigator.clipboard.writeText(curArtifact.fileUrl);
-      toast('📋 تم نسخ رابط الملف'); } catch (e) { toast('❌ تعذّر النسخ: ' + e.message); }
-    return;
+// ★ يسجّل أي ملف تُرجعه نتيجة أداة (file_url من create_docx/create_pdf/
+// create_xlsx/fetch_media_to_file...) كـ Artifact حقيقي في sess.artifacts —
+// تماماً مثل كتل الكود — بدل بطاقة <a href> منفصلة كانت تفتح/تُنزّل الملف
+// مباشرة من المتصفح متجاوزةً نافذة الأكواد كلياً. الآن يمر كلاهما عبر نفس
+// المسار (openArtifact) ونفس النافذة.
+function addFileArtifactIfAny(resultContent,toolName){
+  let parsed;try{parsed=JSON.parse(resultContent);}catch(e){return;}
+  const r=parsed?.result||parsed;
+  const fileUrl=r?.file_url;
+  if(!fileUrl||typeof fileUrl!=='string')return;
+  const name=fileUrl.split('/').pop();
+  const full=fileUrl.startsWith('http')?fileUrl:Backend.url()+fileUrl;
+  const ext=(name.split('.').pop()||'').toLowerCase();
+  const embeddable=['pdf','png','jpg','jpeg','gif','webp','svg'].includes(ext);
+  const sess=cur();
+  const id='f'+hash(full+name);
+  if(sess){
+    let a=sess.artifacts.find(x=>x.id===id);
+    if(!a){a={id,kind:'file',fileUrl:full,fileType:ext.toUpperCase()||'ملف',toolName,title:name,embeddable};sess.artifacts.push(a);}
   }
-  const code = curArtifact ? curArtifact.content : live.code;
-  if (!code) return toast('لا يوجد كود لنسخه');
-  try { await navigator.clipboard.writeText(code);
-    toast('📋 تم نسخ الكود'); } catch (e) { toast('❌ تعذّر النسخ: ' + e.message); }
-}
-
-function addFileArtifactIfAny(resultContent, toolName) {
-  let parsed;
-  try { parsed = JSON.parse(resultContent); } catch (e) { return; }
-  const r = parsed?.result || parsed;
-  const fileUrl = r?.file_url;
-  if (!fileUrl || typeof fileUrl !== 'string') return;
-  const name = fileUrl.split('/').pop();
-  const full = fileUrl.startsWith('http') ? fileUrl : Backend.url() + fileUrl;
-  const ext = (name.split('.').pop() || '').toLowerCase();
-  const embeddable = ['pdf', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext);
-  const sess = cur();
-  const id = 'f' + hash(full + name);
-  if (sess) {
-    let a = sess.artifacts.find(x => x.id === id);
-    if (!a) { a = { id, kind: 'file', fileUrl: full, fileType: ext.toUpperCase() || 'ملف', toolName, title: name,
-        embeddable };
-      sess.artifacts.push(a); }
-  }
-  const w = $('chatInner');
-  const d = document.createElement('div');
-  d.className = 'msg bot';
-  d.innerHTML =
-    `<button class="artifact" onclick="openArtifact('${id}')"><span class="aic">📁</span>
+  const w=$('chatInner');
+  const d=document.createElement('div');d.className='msg bot';
+  d.innerHTML=`<button class="artifact" onclick="openArtifact('${id}')"><span class="aic">📁</span>
     <span class="at"><b>${esc(name)}</b><small>${esc(toolName)} · اضغط للفتح في نافذة الأكواد</small></span></button>`;
-  w.appendChild(d);
-  scrollBottom(true);
+  w.appendChild(d);scrollBottom(true);
 }
 
 /* ============ 13) الملفات + القوائم ============ */
-async function uploadMediaFile(file) {
-  const fd = new FormData();
-  fd.append('file', file, file.name);
-  const h = Backend.headers();
-  delete h['Content-Type'];
-  const r = await diagFetch(Backend.url() + '/upload', { method: 'POST', headers: h, body: fd,
-    signal: AbortSignal.timeout(300000) }, 'رفع ملف: ' + file.name);
-  if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + r.text.slice(0, 200));
-  const d = r.json();
-  if (!d || !d.local_path) throw new Error('استجابة رفع غير صالحة من الخادم');
+async function uploadMediaFile(file){
+  const fd=new FormData();fd.append('file',file,file.name);
+  const h=Backend.headers();delete h['Content-Type']; // اترك المتصفح يضبط حدود multipart تلقائياً
+  const r=await diagFetch(Backend.url()+'/upload',{method:'POST',headers:h,body:fd,
+    signal:AbortSignal.timeout(300000)},'رفع ملف: '+file.name);
+  if(!r.ok)throw new Error('HTTP '+r.status+': '+r.text.slice(0,200));
+  const d=r.json();
+  if(!d||!d.local_path)throw new Error('استجابة رفع غير صالحة من الخادم');
   return d;
 }
-
-function addFiles(list) {
-  [...list].forEach(f => {
-    if (f.type.startsWith('video/') || f.type.startsWith('audio/')) {
-      const chip = { name: f.name, type: f.type, uploading: true };
-      files.push(chip);
-      renderChips();
-      uploadMediaFile(f).then(d => {
-        chip.uploading = false;
-        chip.serverPath = d.local_path;
-        chip.fileUrl = d.file_url;
-        renderChips();
-        toast('✅ تم رفع ' + f.name + ' إلى الخادم');
-      }).catch(e => {
-        files = files.filter(x => x !== chip);
-        renderChips();
-        toast('❌ فشل رفع ' + f.name + ': ' + e.message);
+function addFiles(list){
+  [...list].forEach(f=>{
+    if(f.type.startsWith('video/')||f.type.startsWith('audio/')){
+      // ★ رفع حقيقي (multipart) إلى /upload بدل قراءة الملف كنص — قراءته
+      // كنص كانت تُتلف بيانات الفيديو/الصوت الثنائية ولا تحفظه على الخادم
+      // إطلاقاً، فلا يوجد أي "مسار" ليستخدمه الوكيل.
+      const chip={name:f.name,type:f.type,uploading:true};
+      files.push(chip);renderChips();
+      uploadMediaFile(f).then(d=>{
+        chip.uploading=false;chip.serverPath=d.local_path;chip.fileUrl=d.file_url;
+        renderChips();toast('✅ تم رفع '+f.name+' إلى الخادم');
+      }).catch(e=>{
+        files=files.filter(x=>x!==chip);renderChips();
+        toast('❌ فشل رفع '+f.name+': '+e.message);
       });
       return;
     }
-    const rd = new FileReader();
-    rd.onload = () => { files.push({ name: f.name, type: f.type, data: rd.result });
-      renderChips(); };
-    f.type.startsWith('image/') ? rd.readAsDataURL(f) : rd.readAsText(f);
+    const rd=new FileReader();
+    rd.onload=()=>{files.push({name:f.name,type:f.type,data:rd.result});renderChips();};
+    f.type.startsWith('image/')?rd.readAsDataURL(f):rd.readAsText(f);
   });
-  fileinput.value = '';
+  fileinput.value='';
 }
-
-function renderChips() {
-  $('chips').innerHTML = files.map((f, i) =>
-    `<span class="chip">${f.uploading ? '⏳' : '📎'} ${esc(f.name)}${f.serverPath ? ' ✓' : ''}<button onclick="files.splice(${i},1);renderChips()">✕</button></span>`
-  ).join('');
-}
-
-function toggleSidebar() { sidebar.classList.toggle('open');
-  overlay.classList.toggle('show', sidebar.classList.contains('open')); }
-
-function closeAll() { plusPop.classList.remove('open');
-  sidebar.classList.remove('open');
-  overlay.classList.remove('show'); }
-document.addEventListener('click', e => {
-  if (!plusWrap.contains(e.target)) plusPop.classList.remove('open');
-  if (window.innerWidth <= 768 && sidebar.classList.contains('open') && !sidebar.contains(e.target) && e.target.id !==
-    'hamb') closeAll();
-});
+function renderChips(){$('chips').innerHTML=files.map((f,i)=>
+  `<span class="chip">${f.uploading?'⏳':'📎'} ${esc(f.name)}${f.serverPath?' ✓':''}<button onclick="files.splice(${i},1);renderChips()">✕</button></span>`).join('');}
+function toggleSidebar(){sidebar.classList.toggle('open');overlay.classList.toggle('show',sidebar.classList.contains('open'));}
+function closeAll(){plusPop.classList.remove('open');sidebar.classList.remove('open');overlay.classList.remove('show');}
+document.addEventListener('click',e=>{
+  if(!plusWrap.contains(e.target))plusPop.classList.remove('open');
+  if(window.innerWidth<=768&&sidebar.classList.contains('open')&&!sidebar.contains(e.target)&&e.target.id!=='hamb')closeAll();});
 
 /* ============ 14) حلقة الوكيل ============ */
-function normToolCalls(tcs) {
-  return (tcs || []).map((tc, i) => {
-    const fn = tc.function || tc;
-    let args = fn.arguments ?? tc.arguments ?? '{}';
-    if (typeof args !== 'string') args = JSON.stringify(args);
-    return { id: tc.id || ('call_' + Date.now() + '_' + i), type: 'function',
-      function: { name: fn.name || tc.name || '', arguments: args } };
-  }).filter(t => t.function.name);
+function normToolCalls(tcs){
+  return(tcs||[]).map((tc,i)=>{
+    const fn=tc.function||tc;
+    let args=fn.arguments??tc.arguments??'{}';
+    if(typeof args!=='string')args=JSON.stringify(args);
+    return{id:tc.id||('call_'+Date.now()+'_'+i),type:'function',
+      function:{name:fn.name||tc.name||'',arguments:args}};}).filter(t=>t.function.name);
 }
-
-function newAgentBox() {
-  const b = document.createElement('div');
-  b.className = 'agent-box open';
-  b.innerHTML =
-    `<div class="agent-head" onclick="this.parentNode.classList.toggle('open')">
+function newAgentBox(){
+  const b=document.createElement('div');b.className='agent-box open';
+  b.innerHTML=`<div class="agent-head" onclick="this.parentNode.classList.toggle('open')">
     <span class="sp"></span><div class="lbl"><span class="t">بدء المهمة</span><small class="st"></small></div><span class="chev">▾</span></div>
     <div class="agent-log"></div>`;
-  $('chatInner').appendChild(b);
-  scrollBottom(true);
-  return {
-    el: b,
-    set(t, s) { b.querySelector('.t').textContent = t;
-      b.querySelector('.st').textContent = s || '';
-      scrollBottom(); },
-    step(ic, cls, txt, det) { const s = document.createElement('div');
-      s.className = 'step ' + cls;
-      s.innerHTML =
-        `<span class="ic">${ic}</span><div class="stx">${det
-        ? `<details><summary>${esc(txt)}</summary><pre>${esc(String(det)).slice(0,4000)}</pre></details>` : esc(txt)}</div>`;
-      b.querySelector('.agent-log').appendChild(s);
-      scrollBottom();
-      return s; },
-    finish(t) { b.classList.add('done');
-      b.classList.remove('open');
-      this.set(t || 'اكتملت المهمة', 'اضغط لعرض التفاصيل'); }
-  };
+  $('chatInner').appendChild(b);scrollBottom(true);
+  return{el:b,
+    set(t,s){b.querySelector('.t').textContent=t;b.querySelector('.st').textContent=s||'';scrollBottom();},
+    step(ic,cls,txt,det){const s=document.createElement('div');s.className='step '+cls;
+      s.innerHTML=`<span class="ic">${ic}</span><div class="stx">${det
+        ?`<details><summary>${esc(txt)}</summary><pre>${esc(String(det)).slice(0,4000)}</pre></details>`:esc(txt)}</div>`;
+      b.querySelector('.agent-log').appendChild(s);scrollBottom();return s;},
+    finish(t){b.classList.add('done');b.classList.remove('open');this.set(t||'اكتملت المهمة','اضغط لعرض التفاصيل');}};
 }
-
-function genParams() { const o = {};
-  if (cfg.temp !== '') o.temperature = parseFloat(cfg.temp);
-  if (cfg.maxTok !== '') o.max_tokens = parseInt(cfg.maxTok);
-  if (cfg.topP !== '') o.top_p = parseFloat(cfg.topP);
-  return o; }
-
-const STANDING_INSTRUCTIONS =
-  `عند إنشاء كود طويل أو منطقي متعدد الخطوات: اكتب أولاً خطة موجزة ومرقّمة داخل
+function genParams(){const o={};
+  if(cfg.temp!=='')o.temperature=parseFloat(cfg.temp);
+  if(cfg.maxTok!=='')o.max_tokens=parseInt(cfg.maxTok);
+  if(cfg.topP!=='')o.top_p=parseFloat(cfg.topP);return o;}
+const STANDING_INSTRUCTIONS=
+`عند إنشاء كود طويل أو منطقي متعدد الخطوات: اكتب أولاً خطة موجزة ومرقّمة داخل
 الوسم <plan> بالضبط هكذا: <plan>١. ... ٢. ... </plan> (هذا القسم لا يظهر في
 الدردشة المرئية للمستخدم، بل في صندوق تفكير منفصل)، ثم تابع مباشرة بعده
 بكتابة الكود الفعلي كاملاً في كتلة كود واحدة متماسكة تحقق كل بنود الخطة.
@@ -1846,330 +1307,276 @@ const STANDING_INSTRUCTIONS =
 - ابحث دائمًا عن أحدث المعلومات المتاحة عند الحاجة، واعتمد أحدث تاريخ أو إصدار أو تحديث ذي صلة بالمهمة.
 - إذا كانت المهمة تتطلب معلومات قد تكون متغيرة أو حديثة، فقم بالبحث في الإنترنت للحصول على أحدث المعلومات قبل الإجابة، ثم ابنِ الإجابة على النتائج التي تم التحقق منها.
 - تُعد جميع التعليمات السابقة متطلبات إلزامية يجب تنفيذها متى كانت ذات صلة بالمهمة، ولا يجوز تجاوزها أو تجاهلها..`;
+function apiMessages(s,zepCtx){
+  const m=s.messages.map(({_files,...x})=>({...x,content:x.content??''}));
+  const sys=[cfg.sysPrompt,STANDING_INSTRUCTIONS,zepCtx].filter(Boolean).join('\n\n');
+  return sys?[{role:'system',content:sys},...m]:m;}
+function setBusy(v){busy=v;$('send').style.display=v?'none':'block';$('stopBtn').style.display=v?'block':'none';
+  if(!v)$('chatFollowBtn').style.display='none';}
 
-function apiMessages(s, zepCtx) {
-  const m = s.messages.map(({ _files, ...x }) => ({ ...x,
-    content: x.content ?? '' }));
-  const sys = [cfg.sysPrompt, STANDING_INSTRUCTIONS, zepCtx].filter(Boolean).join('\n\n');
-  return sys ? [{ role: 'system', content: sys }, ...m] : m;
-}
-
-function setBusy(v) { busy = v;
-  $('send').style.display = v ? 'none' : 'block';
-  $('stopBtn').style.display = v ? 'block' : 'none';
-  if (!v) $('chatFollowBtn').style.display = 'none'; }
-
-async function sendMsg() {
-  if (busy) return;
-  const text = $('input').value.trim();
-  if (!text && !files.length) return;
-  if (files.some(f => f.uploading)) return toast('⏳ انتظر اكتمال رفع الملفات أولاً');
-  if (!cfg.model || (!cfg.proxyMode && !cfg.baseUrl)) { openSettings(); return toast('⚠️ أكمل إعداد المزوّد أولاً'); }
-  const s = cur();
-  if (!s.messages.length) { s.title = text.slice(0, 40) || 'ملفات مرفقة';
-    renderSessions(); }
-  let content = text;
-  const imgs = files.filter(f => f.type.startsWith('image/'));
-  const media = files.filter(f => f.serverPath);
-  const txts = files.filter(f => !f.type.startsWith('image/') && !f.serverPath);
-  if (txts.length) content += '\n\n' + txts.map(f => `--- ملف: ${f.name} ---\n${f.data}`).join('\n');
-  if (media.length) content += '\n\n' + media.map(f =>
-    `--- ملف ${f.type.startsWith('video/') ? 'فيديو' : 'صوت'} مرفوع فعلياً على الخادم: ${f.name} ---\n` +
+async function sendMsg(){
+  if(busy)return;
+  const text=$('input').value.trim();
+  if(!text&&!files.length)return;
+  if(files.some(f=>f.uploading))return toast('⏳ انتظر اكتمال رفع الملفات أولاً');
+  if(!cfg.model||(!cfg.proxyMode&&!cfg.baseUrl)){openSettings();return toast('⚠️ أكمل إعداد المزوّد أولاً');}
+  const s=cur();
+  if(!s.messages.length){s.title=text.slice(0,40)||'ملفات مرفقة';renderSessions();}
+  let content=text;
+  const imgs=files.filter(f=>f.type.startsWith('image/'));
+  const media=files.filter(f=>f.serverPath);
+  const txts=files.filter(f=>!f.type.startsWith('image/')&&!f.serverPath);
+  if(txts.length)content+='\n\n'+txts.map(f=>`--- ملف: ${f.name} ---\n${f.data}`).join('\n');
+  if(media.length)content+='\n\n'+media.map(f=>
+    `--- ملف ${f.type.startsWith('video/')?'فيديو':'صوت'} مرفوع فعلياً على الخادم: ${f.name} ---\n`+
     `المسار الدقيق (استخدمه حرفياً كقيمة video_path أو input_audio_path أو أي معامل مسار مشابه عند استدعاء أدوات الفيديو/الصوت): ${f.serverPath}`
   ).join('\n');
-  if (imgs.length) content = [{ type: 'text', text: content }, ...imgs.map(f => ({ type: 'image_url', image_url: { url: f
-        .data } }))];
-  const fn = files.map(f => f.name);
-  files = [];
-  renderChips();
-  $('input').value = '';
-  $('input').style.height = 'auto';
-  s.messages.push({ role: 'user', content, _files: fn });
-  addBubble('user', text, fn, s.messages.length - 1);
-  persist();
-  updateCtx();
-  await runAgent(s, text);
+  if(imgs.length)content=[{type:'text',text:content},...imgs.map(f=>({type:'image_url',image_url:{url:f.data}}))];
+  const fn=files.map(f=>f.name);files=[];renderChips();
+  $('input').value='';$('input').style.height='auto';
+  s.messages.push({role:'user',content,_files:fn});
+  addBubble('user',text,fn,s.messages.length-1);
+  persist();updateCtx();
+  await runAgent(s,text);
 }
-
-async function runAgent(s, userText) {
-  setBusy(true);
-  abortCtl = new AbortController();
-  chatFollow = true;
-  live.userClosed = false;
-  const box = newAgentBox();
-  let zepCtx = '';
-  if (cfg.zep.enabled && cfg.zep.key) {
-    box.set('يسترجع الذاكرة...', 'Zep');
+async function runAgent(s,userText){
+  setBusy(true);abortCtl=new AbortController();chatFollow=true;
+  live.userClosed=false; // ★ بداية نظيفة لكل جولة رد جديدة من الوكيل
+  const box=newAgentBox();
+  let zepCtx='';
+  if(cfg.zep.enabled&&cfg.zep.key){
+    box.set('يسترجع الذاكرة...','Zep');
     await zepEnsureSession(s.id);
-    zepCtx = await zepGetMemoryContext(s.id);
-    box.step(zepCtx ? '✓' : '○', zepCtx ? 'ok' : 'run', zepCtx ? 'تم استرجاع الذاكرة' : 'لا توجد ذاكرة سابقة', zepCtx ||
-      undefined);
+    zepCtx=await zepGetMemoryContext(s.id);
+    box.step(zepCtx?'✓':'○',zepCtx?'ok':'run',zepCtx?'تم استرجاع الذاكرة':'لا توجد ذاكرة سابقة',zepCtx||undefined);
   }
-  try {
-    await agentLoop(s, box, zepCtx);
+  try{
+    await agentLoop(s,box,zepCtx);
     box.finish();
-    const lastAi = [...s.messages].reverse().find(m => m.role === 'assistant' && m.content);
-    if (lastAi && userText) zepAddMemory(s.id, userText, String(lastAi.content).slice(0, 4000));
-  } catch (e) { e.name === 'AbortError' ? box.finish('⏹ تم الإيقاف') : (box.step('✗', 'bad', 'خطأ: ' + e.message), box.finish(
-      '❌ فشلت المهمة')); }
-  liveEnd();
-  persist();
-  updateCtx();
-  setBusy(false);
+    const lastAi=[...s.messages].reverse().find(m=>m.role==='assistant'&&m.content);
+    if(lastAi&&userText)zepAddMemory(s.id,userText,String(lastAi.content).slice(0,4000));
+  }catch(e){e.name==='AbortError'?box.finish('⏹ تم الإيقاف')
+    :(box.step('✗','bad','خطأ: '+e.message),box.finish('❌ فشلت المهمة'));}
+  liveEnd();persist();updateCtx();setBusy(false);
 }
 
-async function agentLoop(s, box, zepCtx) {
-  const MAX_ITER = 20,
-    MAX_TOOLCALLS = 30;
-  let totalCalls = 0;
-  for (let iter = 0; iter < MAX_ITER; iter++) {
-    if (abortCtl.signal.aborted) throw Object.assign(new Error('stopped'), { name: 'AbortError' });
-    const useTools = enabledTools();
-    const allowedNames = new Set(useTools.map(t => t.function.name));
-    box.set(iter === 0 ? 'يفكر...' : 'يحلل نتائج الأدوات...', useTools.length ? useTools.length + ' أداة · جولة ' + (iter +
-      1) : '');
-    box.step('◌', 'run', iter === 0 ? 'إرسال الطلب إلى النموذج' : 'إعادة الاستدعاء بالنتائج');
+async function agentLoop(s,box,zepCtx){
+  const MAX_ITER=20,MAX_TOOLCALLS=30;
+  let totalCalls=0;
+  for(let iter=0;iter<MAX_ITER;iter++){
+    if(abortCtl.signal.aborted)throw Object.assign(new Error('stopped'),{name:'AbortError'});
+    const useTools=enabledTools();
+    const allowedNames=new Set(useTools.map(t=>t.function.name));
+    box.set(iter===0?'يفكر...':'يحلل نتائج الأدوات...',useTools.length?useTools.length+' أداة · جولة '+(iter+1):'');
+    box.step('◌','run',iter===0?'إرسال الطلب إلى النموذج':'إعادة الاستدعاء بالنتائج');
 
-    const msg = await requestModel(s, box, zepCtx, useTools);
+    const msg=await requestModel(s,box,zepCtx,useTools);
 
-    const reasoning = msg.reasoning_content || msg.reasoning || '';
-    if (reasoning) box.step('🧠', 'ok', 'تفكير النموذج (اضغط للعرض)', reasoning);
+    const reasoning=msg.reasoning_content||msg.reasoning||'';
+    if(reasoning)box.step('🧠','ok','تفكير النموذج (اضغط للعرض)',reasoning);
 
-    if (msg.tool_calls?.length) {
-      const calls = normToolCalls(msg.tool_calls);
-      box.set('يخطط...', 'استخدام ' + calls.length + ' أداة');
-      box.step('✓', 'ok', 'الخطة: ' + calls.map(t => t.function.name).join('، '));
-      s.messages.push({ role: 'assistant', content: msg.content || '', tool_calls: calls });
-      for (const tc of calls) {
-        if (abortCtl.signal.aborted) throw Object.assign(new Error('stopped'), { name: 'AbortError' });
+    if(msg.tool_calls?.length){
+      const calls=normToolCalls(msg.tool_calls);
+      box.set('يخطط...','استخدام '+calls.length+' أداة');
+      box.step('✓','ok','الخطة: '+calls.map(t=>t.function.name).join('، '));
+      s.messages.push({role:'assistant',content:msg.content||'',tool_calls:calls});
+      for(const tc of calls){
+        if(abortCtl.signal.aborted)throw Object.assign(new Error('stopped'),{name:'AbortError'});
         totalCalls++;
         let resultContent;
-        if (totalCalls > MAX_TOOLCALLS) {
-          resultContent = JSON.stringify({ error: 'limit_exceeded', message: 'تم تجاوز الحد الأقصى لاستدعاءات الأدوات' });
-          box.step('⚠', 'bad', 'تجاوز حد الاستدعاءات');
-        } else if (!allowedNames.has(tc.function.name)) {
-          resultContent = JSON.stringify({ error: 'tool_not_available', message: 'الأداة غير مفعلة', tool: tc.function
-              .name });
-          box.step('✗', 'bad', 'رفض أداة غير مصرّح بها: ' + tc.function.name);
-        } else {
-          let args = null,
-            parseErr = null;
-          try { args = JSON.parse(tc.function.arguments || '{}'); } catch (e) { parseErr = e.message; }
-          if (parseErr || typeof args !== 'object' || Array.isArray(args)) {
-            resultContent = JSON.stringify({ error: 'invalid_arguments', message: parseErr || 'ليست كائن JSON',
-              raw: String(tc.function.arguments).slice(0, 300) });
-            box.step('✗', 'bad', 'Arguments غير صالحة لـ ' + tc.function.name, tc.function.arguments);
-          } else {
-            box.set('يعمل...', 'تنفيذ: ' + tc.function.name);
-            const st = box.step('◌', 'run', 'تنفيذ ' + tc.function.name);
-            try {
-              const out = await Backend.execute(tc.function.name, args);
-              resultContent = String(out);
-              st.remove();
-              box.step('✓', 'ok', 'نتيجة ' + tc.function.name, resultContent);
-              addFileArtifactIfAny(resultContent, tc.function.name);
-            } catch (e) {
-              resultContent = JSON.stringify({ error: 'execution_failed', message: e.message });
-              st.remove();
-              box.step('✗', 'bad', 'فشل ' + tc.function.name + ': ' + e.message);
+        if(totalCalls>MAX_TOOLCALLS){
+          resultContent=JSON.stringify({error:'limit_exceeded',message:'تم تجاوز الحد الأقصى لاستدعاءات الأدوات'});
+          box.step('⚠','bad','تجاوز حد الاستدعاءات');
+        }else if(!allowedNames.has(tc.function.name)){
+          resultContent=JSON.stringify({error:'tool_not_available',message:'الأداة غير مفعلة',tool:tc.function.name});
+          box.step('✗','bad','رفض أداة غير مصرّح بها: '+tc.function.name);
+        }else{
+          let args=null,parseErr=null;
+          try{args=JSON.parse(tc.function.arguments||'{}');}catch(e){parseErr=e.message;}
+          if(parseErr||typeof args!=='object'||Array.isArray(args)){
+            resultContent=JSON.stringify({error:'invalid_arguments',message:parseErr||'ليست كائن JSON',raw:String(tc.function.arguments).slice(0,300)});
+            box.step('✗','bad','Arguments غير صالحة لـ '+tc.function.name,tc.function.arguments);
+          }else{
+            box.set('يعمل...','تنفيذ: '+tc.function.name);
+            const st=box.step('◌','run','تنفيذ '+tc.function.name);
+            try{
+              const out=await Backend.execute(tc.function.name,args);
+              resultContent=String(out);
+              st.remove();box.step('✓','ok','نتيجة '+tc.function.name,resultContent);
+              addFileArtifactIfAny(resultContent,tc.function.name);
+            }catch(e){
+              resultContent=JSON.stringify({error:'execution_failed',message:e.message});
+              st.remove();box.step('✗','bad','فشل '+tc.function.name+': '+e.message);
             }
           }
         }
-        s.messages.push({ role: 'tool', tool_call_id: tc.id, content: resultContent.slice(0, 8000) });
+        s.messages.push({role:'tool',tool_call_id:tc.id,content:resultContent.slice(0,8000)});
       }
       persist();
       continue;
     }
 
-    box.set('يكتب الرد...', '');
-    if (msg.content) {
-      s.messages.push({ role: 'assistant', content: msg.content });
-      if (!msg._streamed) {
-        addBubble('bot', msg.content, null, s.messages.length - 1);
-        const mm = [...msg.content.matchAll(/```\w*\n?([\s\S]*?)```/g)].pop();
-        if (mm) { const id = 'a' + hash(mm[1]);
-          if (cur().artifacts.find(x => x.id === id)) openArtifact(id); }
-      } else attachBotActions(s.messages.length - 1);
+    box.set('يكتب الرد...','');
+    if(msg.content){
+      s.messages.push({role:'assistant',content:msg.content});
+      if(!msg._streamed){
+        addBubble('bot',msg.content,null,s.messages.length-1);
+        const mm=[...msg.content.matchAll(/```\w*\n?([\s\S]*?)```/g)].pop();
+        if(mm){const id='a'+hash(mm[1]);if(cur().artifacts.find(x=>x.id===id))openArtifact(id);}
+      }else attachBotActions(s.messages.length-1);
     }
-    box.step('✓', 'ok', 'اكتمل الرد');
+    box.step('✓','ok','اكتمل الرد');
     return;
   }
-  box.step('⚠', 'bad', 'بلغت الحلقة الحد الأقصى دون رد نهائي');
+  box.step('⚠','bad','بلغت الحلقة الحد الأقصى دون رد نهائي');
 }
 
-async function requestModel(s, box, zepCtx, useTools) {
-  const body = { model: cfg.model, messages: apiMessages(s, zepCtx), ...genParams() };
-  if (useTools.length) { body.tools = useTools;
-    body.tool_choice = 'auto'; }
+async function requestModel(s,box,zepCtx,useTools){
+  const body={model:cfg.model,messages:apiMessages(s,zepCtx),...genParams()};
+  if(useTools.length){body.tools=useTools;body.tool_choice='auto';}
   let out;
-  try {
-    out = await streamChat({ ...body, stream: true }, box);
-  } catch (err) {
-    if (err.name === 'AbortError') throw err;
-    box.step('↺', 'run', 'تعذّر البث المباشر — التحويل للوضع غير المتدفق', err.message);
-    out = await nonStreamChat({ ...body, stream: false });
+  try{
+    out=await streamChat({...body,stream:true},box);
+  }catch(err){
+    if(err.name==='AbortError')throw err;
+    box.step('↺','run','تعذّر البث المباشر — التحويل للوضع غير المتدفق',err.message);
+    out=await nonStreamChat({...body,stream:false});
   }
-  if (!out.content && !out.tool_calls?.length) {
-    box.step('↺', 'run', 'لم يصل محتوى قابل للقراءة من البث — إعادة المحاولة بدون بث');
-    try { out = await nonStreamChat({ ...body, stream: false }); } catch (e2) { box.step('✗', 'bad', 'فشلت إعادة المحاولة أيضاً: ' +
-        e2.message); }
+  // ★ شبكة أمان لأي مزوّد "غير رسمي": إن نجح الاتصال (HTTP 200) لكن لم
+  // نستطع استخلاص أي محتوى أو استدعاء أداة من شكل البث الذي أرسله المزوّد،
+  // نعيد المحاولة تلقائياً عبر طلب غير متدفق (stream:false) قبل الاستسلام.
+  if(!out.content&&!out.tool_calls?.length){
+    box.step('↺','run','لم يصل محتوى قابل للقراءة من البث — إعادة المحاولة بدون بث');
+    try{out=await nonStreamChat({...body,stream:false});}catch(e2){box.step('✗','bad','فشلت إعادة المحاولة أيضاً: '+e2.message);}
   }
-  if (out.content) {
-    const { plan, rest } = extractPlan(out.content);
-    if (plan) { box.step('🗺️', 'ok', 'خطة النموذج (اضغط للعرض)', plan);
-      out = { ...out, content: rest }; }
+  // في حال لم يُستخرج القسم بعد (مثلاً جاء الرد من nonStreamChat مباشرة)
+  if(out.content){
+    const{plan,rest}=extractPlan(out.content);
+    if(plan){box.step('🗺️','ok','خطة النموذج (اضغط للعرض)',plan);out={...out,content:rest};}
   }
   return out;
 }
-
-async function nonStreamChat(body) {
-  const r = await chatFetch(body, abortCtl.signal);
-  const raw = await r.text();
-  if (!r.ok) throw new Error('HTTP ' + r.status + ' — ' + raw.slice(0, 250));
+async function nonStreamChat(body){
+  const r=await chatFetch(body,abortCtl.signal);
+  const raw=await r.text();
+  if(!r.ok)throw new Error('HTTP '+r.status+' — '+raw.slice(0,250));
   return parseModelPayload(raw);
 }
-
-function parseModelPayload(raw) {
-  let j;
-  try { j = JSON.parse(raw); } catch (e) { return { content: raw || '', reasoning_content: '', tool_calls: undefined }; }
-  const choice = j.choices?.[0] || {};
-  const m = choice.message || choice.delta || j.message || j;
-  const content = (typeof m.content === 'string' ? m.content : null) ?? (typeof j.content === 'string' ? j.content : null) ??
-    (typeof j.text === 'string' ? j.text : '') ?? '';
-  const tool_calls = m.tool_calls || j.tool_calls || undefined;
-  const reasoning_content = m.reasoning_content || m.reasoning || j.reasoning_content || '';
-  return { content, reasoning_content, tool_calls };
+// يحاول استخلاص {content, tool_calls, reasoning_content} من أي شكل JSON
+// معقول (OpenAI القياسي، أو تنويعات شائعة لدى مزوّدين غير رسميين).
+function parseModelPayload(raw){
+  let j;try{j=JSON.parse(raw);}catch(e){return{content:raw||'',reasoning_content:'',tool_calls:undefined};}
+  const choice=j.choices?.[0]||{};
+  const m=choice.message||choice.delta||j.message||j;
+  const content=(typeof m.content==='string'?m.content:null)??(typeof j.content==='string'?j.content:null)??(typeof j.text==='string'?j.text:'')??'';
+  const tool_calls=m.tool_calls||j.tool_calls||undefined;
+  const reasoning_content=m.reasoning_content||m.reasoning||j.reasoning_content||'';
+  return{content,reasoning_content,tool_calls};
 }
 
-async function streamChat(body, box) {
-  const r = await chatFetch(body, abortCtl.signal);
-  const ct = (r.headers.get('content-type') || '');
-  if (!r.ok) throw new Error('HTTP ' + r.status + ' — ' + (await r.text()).slice(0, 250));
-  let div = null,
-    full = '',
-    reasoning = '',
-    wasLive = false,
-    rawAll = '',
-    handledAsWholeJson = false;
-  const tcAcc = [];
-  const rd = r.body.getReader(),
-    dec = new TextDecoder();
-  let buf = '';
-  const applyDelta = (delta, messageObj) => {
-    const rc = delta?.reasoning_content || delta?.reasoning || messageObj?.reasoning_content || messageObj?.reasoning;
-    if (rc) { reasoning += rc;
-      box.set('يفكر...', reasoning.slice(-80)); }
-    const tcs = delta?.tool_calls || messageObj?.tool_calls;
-    if (tcs) {
-      for (const t of tcs) {
-        const i = t.index ?? tcAcc.length;
-        tcAcc[i] = tcAcc[i] || { id: t.id || '', type: 'function', function: { name: '', arguments: '' } };
-        if (t.id) tcAcc[i].id = t.id;
-        const fn = t.function || t;
-        if (fn?.name) tcAcc[i].function.name += fn.name;
-        if (fn?.arguments !== undefined) tcAcc[i].function.arguments += (typeof fn.arguments === 'string' ? fn.arguments :
-          JSON.stringify(fn.arguments));
+async function streamChat(body,box){
+  const r=await chatFetch(body,abortCtl.signal);
+  const ct=(r.headers.get('content-type')||'');
+  if(!r.ok)throw new Error('HTTP '+r.status+' — '+(await r.text()).slice(0,250));
+  let div=null,full='',reasoning='',wasLive=false,rawAll='',handledAsWholeJson=false;
+  const tcAcc=[];
+  const rd=r.body.getReader(),dec=new TextDecoder();let buf='';
+  const applyDelta=(delta,messageObj)=>{
+    const rc=delta?.reasoning_content||delta?.reasoning||messageObj?.reasoning_content||messageObj?.reasoning;
+    if(rc){reasoning+=rc;box.set('يفكر...',reasoning.slice(-80));}
+    const tcs=delta?.tool_calls||messageObj?.tool_calls;
+    if(tcs){
+      for(const t of tcs){
+        const i=t.index??tcAcc.length;
+        tcAcc[i]=tcAcc[i]||{id:t.id||'',type:'function',function:{name:'',arguments:''}};
+        if(t.id)tcAcc[i].id=t.id;
+        const fn=t.function||t;
+        if(fn?.name)tcAcc[i].function.name+=fn.name;
+        if(fn?.arguments!==undefined)tcAcc[i].function.arguments+=(typeof fn.arguments==='string'?fn.arguments:JSON.stringify(fn.arguments));
       }
-      box.set('يخطط...', 'يجهّز استدعاءات الأدوات...');
+      box.set('يخطط...','يجهّز استدعاءات الأدوات...');
     }
-    const chunk = delta?.content ?? delta?.text ?? (!delta?.tool_calls && !tcs ? messageObj?.content : null);
-    if (typeof chunk === 'string' && chunk) {
-      full += chunk;
-      if (!div) { box.set('يكتب الرد...', '');
-        div = addBubble('bot', ''); }
-      const p = parseLive(full);
-      if (p.inside && qualifiesArtifact(p.lang, p.code.length)) {
-        wasLive = true;
-        box.set('يكتب الكود...', p.lang + ' · ' + p.code.length + ' حرف');
-        liveWrite(p.lang, p.code);
-        const shown = full.slice(0, full.lastIndexOf('```'));
-        div.innerHTML = md(shown, null) + `<div class="artifact writing"><span class="aic">✍️</span>
+    const chunk=delta?.content??delta?.text??(!delta?.tool_calls&&!tcs?messageObj?.content:null);
+    if(typeof chunk==='string'&&chunk){
+      full+=chunk;
+      if(!div){box.set('يكتب الرد...','');div=addBubble('bot','');}
+      const p=parseLive(full);
+      if(p.inside&&qualifiesArtifact(p.lang,p.code.length)){
+        wasLive=true;
+        box.set('يكتب الكود...',p.lang+' · '+p.code.length+' حرف');
+        liveWrite(p.lang,p.code);
+        const shown=full.slice(0,full.lastIndexOf('```'));
+        div.innerHTML=md(shown,null)+`<div class="artifact writing"><span class="aic">✍️</span>
           <span class="at"><b>يكتب الكود في نافذة الأكواد...</b><small>${esc(p.lang.toUpperCase())} · ${p.code.length} حرف</small></span></div>`;
-      } else {
-        div.innerHTML = md(full.replace(/`{1,2}$/, ''), null);
+      }else{
+        div.innerHTML=md(full.replace(/`{1,2}$/,''),null);
       }
       scrollBottom();
     }
   };
-  while (true) {
-    const { done, value } = await rd.read();
-    if (done) break;
-    const chunkTxt = dec.decode(value, { stream: true });
-    rawAll += chunkTxt;
-    buf += chunkTxt;
-    const lines = buf.split('\n');
-    buf = lines.pop();
-    for (const raw of lines) {
-      const l = raw.trim();
-      if (!l) continue;
-      let payload = null;
-      if (l.startsWith('data:')) {
-        const d = l.slice(5).trim();
-        if (d === '[DONE]') continue;
-        try { payload = JSON.parse(d); } catch { continue }
-      } else if (l.startsWith('{') || l.startsWith('[')) {
-        try { payload = JSON.parse(l); } catch { continue }
-      } else continue;
-      if (!payload) continue;
-      const choice = payload.choices?.[0];
-      if (choice) applyDelta(choice.delta, choice.message);
-      else if (payload.content || payload.message || payload.tool_calls) applyDelta(null, payload.message || payload);
+  while(true){
+    const{done,value}=await rd.read();if(done)break;
+    const chunkTxt=dec.decode(value,{stream:true});
+    rawAll+=chunkTxt;buf+=chunkTxt;
+    const lines=buf.split('\n');buf=lines.pop();
+    for(const raw of lines){
+      const l=raw.trim();if(!l)continue;
+      let payload=null;
+      if(l.startsWith('data:')){
+        const d=l.slice(5).trim();if(d==='[DONE]')continue;
+        try{payload=JSON.parse(d);}catch{continue}
+      }else if(l.startsWith('{')||l.startsWith('[')){
+        // ★ تسامح مع مزوّدين يبثّون NDJSON بدون بادئة "data:" — نحاول تفسير
+        // السطر مباشرة كـ JSON بدل تجاهله.
+        try{payload=JSON.parse(l);}catch{continue}
+      }else continue;
+      if(!payload)continue;
+      const choice=payload.choices?.[0];
+      if(choice)applyDelta(choice.delta,choice.message);
+      else if(payload.content||payload.message||payload.tool_calls)applyDelta(null,payload.message||payload);
     }
   }
-  if (!full && !tcAcc.length && rawAll.trim()) {
-    const parsed = parseModelPayload(rawAll.trim());
-    if (parsed.content || parsed.tool_calls?.length) {
-      full = parsed.content || '';
-      reasoning = parsed.reasoning_content || reasoning;
-      if (parsed.tool_calls) for (const t of parsed.tool_calls) tcAcc.push(t);
-      handledAsWholeJson = true;
-      if (full) { div = div || addBubble('bot', '');
-        div.innerHTML = md(full, null); }
+  // ★ شبكة أمان أخيرة: لو لم نستخرج أي محتوى أو أداة رغم نجاح الاتصال،
+  // وربما كان الجسم كله عبارة عن كائن JSON واحد كبير (رد غير متدفق فعلياً
+  // رغم طلب stream:true) لم يتقسّم بالشكل المتوقع سطراً بسطر.
+  if(!full&&!tcAcc.length&&rawAll.trim()){
+    const parsed=parseModelPayload(rawAll.trim());
+    if(parsed.content||parsed.tool_calls?.length){
+      full=parsed.content||'';reasoning=parsed.reasoning_content||reasoning;
+      if(parsed.tool_calls)for(const t of parsed.tool_calls)tcAcc.push(t);
+      handledAsWholeJson=true;
+      if(full){div=div||addBubble('bot','');div.innerHTML=md(full,null);}
     }
   }
-  DIAG.unshift({
-    time: new Date().toISOString().slice(11, 19),
-    url: '(stream)',
-    method: 'STREAM',
-    note: 'chatStream نتيجة',
-    reqBody: '',
-    status: r.status,
-    ct: ct.split(';')[0],
-    dur: 0,
-    err: (!full && !tcAcc.length) ? 'لم يُستخرج أي محتوى من البث' : '',
-    body: (handledAsWholeJson ? '[تم تفسيره كـ JSON كامل غير متدفق] ' : '') + rawAll.slice(0, 400)
-  });
-  if (DIAG.length > 60) DIAG.pop();
+  DIAG.unshift({time:new Date().toISOString().slice(11,19),url:'(stream)',method:'STREAM',note:'chatStream نتيجة',
+    reqBody:'',status:r.status,ct:ct.split(';')[0],dur:0,
+    err:(!full&&!tcAcc.length)?'لم يُستخرج أي محتوى من البث':'',
+    body:(handledAsWholeJson?'[تم تفسيره كـ JSON كامل غير متدفق] ':'')+rawAll.slice(0,400)});
+  if(DIAG.length>60)DIAG.pop();
   {
-    const { plan, rest } = extractPlan(full);
-    if (plan) { box.step('🗺️', 'ok', 'خطة النموذج (اضغط للعرض)', plan);
-      full = rest; }
+    const{plan,rest}=extractPlan(full);
+    if(plan){box.step('🗺️','ok','خطة النموذج (اضغط للعرض)',plan);full=rest;}
   }
-  if (div) {
-    const sess = cur();
-    div.innerHTML = md(full, sess);
+  if(div){
+    const sess=cur();
+    div.innerHTML=md(full,sess);
     liveEnd();
-    if (wasLive) {
-      const m = [...full.matchAll(/```\w*\n?([\s\S]*?)```/g)].pop();
-      const id = m ? 'a' + hash(m[1]) : null;
-      const a = id && sess.artifacts.find(x => x.id === id);
-      if (a) openArtifact(a.id);
-      else $('cpTitle').textContent = '✓ اكتمل الكود';
+    if(wasLive){
+      const m=[...full.matchAll(/```\w*\n?([\s\S]*?)```/g)].pop();
+      const id=m?'a'+hash(m[1]):null;
+      const a=id&&sess.artifacts.find(x=>x.id===id);
+      if(a)openArtifact(a.id);
+      else $('cpTitle').textContent='✓ اكتمل الكود';
     }
     scrollBottom();
   }
-  return {
-    content: full,
-    reasoning_content: reasoning,
-    tool_calls: tcAcc.filter(t => t && t.function.name).length ? tcAcc.filter(t => t && t.function.name) : undefined,
-    _streamed: !!div
-  };
+  return{content:full,reasoning_content:reasoning,
+    tool_calls:tcAcc.filter(t=>t&&t.function.name).length?tcAcc.filter(t=>t&&t.function.name):undefined,
+    _streamed:!!div};
 }
 
-input.addEventListener('input', () => { input.style.height = 'auto';
-  input.style.height = Math.min(input.scrollHeight, 140) + 'px'; });
+input.addEventListener('input',()=>{input.style.height='auto';input.style.height=Math.min(input.scrollHeight,140)+'px';});
 loadAll();
-
 </script>
 </body>
 </html>
