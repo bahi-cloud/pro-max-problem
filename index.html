@@ -239,6 +239,7 @@ main{flex:1;display:flex;flex-direction:column;min-width:0;position:relative}
               <div class="ph">🧰 أدوات الباك اند <button class="rl" onclick="loadTools(true)">⟳ إعادة السحب</button></div>
               <div id="toolsScroll"><div class="toolsEmpty">جارٍ السحب...</div></div>
               <div class="ph">🔌 تكاملات Composio <button class="rl" onclick="refreshComposio(true)">⟳ تحديث الحالة</button></div>
+              <div style="padding:2px 14px 8px;font-size:10px;color:var(--muted);line-height:1.7">المفتاح ⇠ تفعيل استخدام أدوات الحساب مع النموذج · الزر ⇠ تسجيل الدخول (ربط الحساب) أو تسجيل الخروج (قفل الاتصال فعلياً من الخادم)</div>
               <div id="composioScroll"></div>
             </div>
           </div>
@@ -714,6 +715,11 @@ async function runToolTest(){
 }
 
 /* ============ 8) Composio ============ */
+// ★ القائمة مأخوذة من: (أ) الحسابات الظاهرة فعلياً في لوحة Composio الخاصة
+// بالمستخدم (Gmail, GitHub, Google Calendar, Notion, Google Sheets, Slack,
+// Google Drive, Reddit, Facebook, Apify)، و(ب) أهم المنصات الشائعة الأخرى
+// المتوفرة كـ Toolkits جاهزة في Composio والتي يستخدمها الناس عادة، لإتاحة
+// ربطها لاحقاً بضغطة واحدة دون تعديل الكود مجدداً.
 const COMPOSIO_APPS=[
   {id:'gmail',name:'Gmail',icon:'📧',prefixes:['gmail']},
   {id:'googlecalendar',name:'Google Calendar',icon:'📅',prefixes:['googlecalendar','calendar','gcal']},
@@ -722,11 +728,58 @@ const COMPOSIO_APPS=[
   {id:'notion',name:'Notion',icon:'📝',prefixes:['notion']},
   {id:'googledrive',name:'Google Drive',icon:'📁',prefixes:['googledrive','drive','gdrive']},
   {id:'googlesheets',name:'Google Sheets',icon:'📊',prefixes:['googlesheets','sheets','gsheets']},
+  {id:'googledocs',name:'Google Docs',icon:'📄',prefixes:['googledocs','gdocs']},
+  {id:'googlemeet',name:'Google Meet',icon:'🎦',prefixes:['googlemeet','gmeet']},
   {id:'twitter',name:'X / Twitter',icon:'🐦',prefixes:['twitter','x']},
+  {id:'reddit',name:'Reddit',icon:'👽',prefixes:['reddit']},
+  {id:'facebook',name:'Facebook',icon:'📘',prefixes:['facebook']},
+  {id:'instagram',name:'Instagram',icon:'📸',prefixes:['instagram']},
+  {id:'whatsapp',name:'WhatsApp',icon:'🟢',prefixes:['whatsapp']},
+  {id:'linkedin',name:'LinkedIn',icon:'💼',prefixes:['linkedin']},
+  {id:'youtube',name:'YouTube',icon:'▶️',prefixes:['youtube']},
+  {id:'discord',name:'Discord',icon:'🎮',prefixes:['discord']},
+  {id:'telegram',name:'Telegram',icon:'✈️',prefixes:['telegram']},
+  {id:'apify',name:'Apify',icon:'🕷️',prefixes:['apify']},
+  {id:'trello',name:'Trello',icon:'📋',prefixes:['trello']},
+  {id:'asana',name:'Asana',icon:'✅',prefixes:['asana']},
+  {id:'jira',name:'Jira',icon:'🧩',prefixes:['jira']},
+  {id:'hubspot',name:'HubSpot',icon:'🧡',prefixes:['hubspot']},
+  {id:'stripe',name:'Stripe',icon:'💳',prefixes:['stripe']},
+  {id:'dropbox',name:'Dropbox',icon:'📦',prefixes:['dropbox']},
+  {id:'zoom',name:'Zoom',icon:'🎥',prefixes:['zoom']},
+  {id:'airtable',name:'Airtable',icon:'🗂️',prefixes:['airtable']},
+  {id:'calendly',name:'Calendly',icon:'🗓️',prefixes:['calendly']},
+  {id:'outlook',name:'Outlook',icon:'📩',prefixes:['outlook','microsoftoutlook']},
+  {id:'onedrive',name:'OneDrive',icon:'☁️',prefixes:['onedrive','microsoftonedrive']},
+  {id:'shopify',name:'Shopify',icon:'🛍️',prefixes:['shopify']},
+  {id:'figma',name:'Figma',icon:'🎨',prefixes:['figma']},
+  {id:'salesforce',name:'Salesforce',icon:'☁️',prefixes:['salesforce']},
+  {id:'mailchimp',name:'Mailchimp',icon:'🐵',prefixes:['mailchimp']},
+  {id:'supabase',name:'Supabase',icon:'⚡',prefixes:['supabase']},
 ];
 let pollTimer=null,pendingApp=null;
 function appOf(n){const p=n.split(/[_.]/)[0].toLowerCase();return COMPOSIO_APPS.find(a=>a.prefixes.includes(p))?.id||null;}
 function appState(id){return cfg.composio[id]=cfg.composio[id]||{connected:false,enabled:false};}
+// ★ إصلاح جذري لخطأ 404 في تسجيل الدخول: كانت أسماء أدوات Composio
+// (composio_create_session, composio_authorize_toolkit, composio_list_
+// connected_tools) مُثبَّتة حرفياً في الكود بافتراض أنها موجودة دائماً بنفس
+// الاسم على أي خادم باك اند. لكن بعد تغيير رابط الباك اند، قد يعرّض الخادم
+// الجديد نفس الوظيفة بأسماء مختلفة (أو لا يعرضها إطلاقاً) — فيصل الطلب فعلاً
+// إلى الخادم الصحيح لكن باسم أداة غير موجود عنده، فيردّ 404، وهذا ما كان
+// يظهر رغم أن تسجيل الدخول "كان يعمل سابقاً" مع الخادم القديم تحديداً.
+// الإصلاح: بدل الافتراض الأعمى، نبحث فعلياً داخل قائمة الأدوات التي سحبناها
+// من الخادم الحالي (نفس tools المستخدمة في قسم "🧰 أدوات الباك اند") عن أداة
+// تُطابق الاسم المتوقع أو تحتوي كلماته المفتاحية، ونستخدم الاسم الحقيقي
+// الموجود فعلياً. إن لم توجد أي أداة مطابقة، نُخبر المستخدم بوضوح بدل محاولة
+// استدعاء اسم وهمي والحصول على 404 غامض.
+function findComposioTool(exactCandidates,keywordGroups){
+  for(const c of exactCandidates)if(tools.some(t=>t.name===c))return c;
+  for(const kws of keywordGroups){
+    const t=tools.find(x=>{const n=x.name.toLowerCase();return kws.every(k=>n.includes(k));});
+    if(t)return t.name;
+  }
+  return null;
+}
 function renderComposio(){
   $('composioScroll').innerHTML=COMPOSIO_APPS.map(a=>{
     const st=appState(a.id),n=tools.filter(t=>appOf(t.name)===a.id).length;
@@ -743,11 +796,15 @@ function renderComposio(){
 async function composioLogin(app){
   try{
     if(!cfg.composioUserId){cfg.composioUserId='u_'+Date.now().toString(36)+Math.random().toString(36).slice(2,8);persist();}
+    const createTool=findComposioTool(['composio_create_session'],[['composio','create','session'],['composio','session']]);
+    if(!createTool)throw new Error('لا توجد أداة إنشاء جلسة Composio على هذا الخادم — راجع 🩺 أو أعد سحب الأدوات ⟳');
     toast('⏳ يُنشئ جلسة اتصال...');
-    const sess=await callTool('composio_create_session',{user_id:cfg.composioUserId,toolkits:[app]});
+    const sess=await callTool(createTool,{user_id:cfg.composioUserId,toolkits:[app]});
     const sessionId=sess?.session_id;
     if(!sessionId)throw new Error('لم يُرجع الخادم session_id');
-    const auth=await callTool('composio_authorize_toolkit',{session_id:sessionId,toolkit:app});
+    const authTool=findComposioTool(['composio_authorize_toolkit'],[['composio','authorize'],['composio','auth','toolkit']]);
+    if(!authTool)throw new Error('لا توجد أداة تفويض (authorize) على هذا الخادم — راجع 🩺 أو أعد سحب الأدوات ⟳');
+    const auth=await callTool(authTool,{session_id:sessionId,toolkit:app});
     const url=auth?.redirect_url;
     if(!/^http/.test(url||''))throw new Error('لا يوجد رابط تفويض صالح في رد الخادم');
     window.open(url,'_blank');
@@ -761,17 +818,42 @@ async function composioLogin(app){
     },3000);
   }catch(e){toast('❌ تعذر بدء تسجيل الدخول: '+e.message);}
 }
-function composioLogout(app){
-  appState(app).connected=false;appState(app).enabled=false;
+// ★ الآن يحاول فعلياً قفل/إلغاء الاتصال من جهة الخادم (لا مجرد إخفاء محلي
+// كما كان سابقاً)، عبر نفس آلية الاكتشاف الديناميكي: يبحث عن أداة حذف/فصل
+// اتصال حقيقية بين الأدوات المسحوبة فعلياً، ويستدعيها. إن لم توجد أي أداة
+// كهذه على الخادم الحالي، أو فشل الاستدعاء، يُخبر المستخدم بصراحة أن الإيقاف
+// محلي فقط بدل الادّعاء الصامت بأن الحساب فُصل فعلياً.
+async function composioLogout(app){
+  const st=appState(app);
+  const revokeTool=findComposioTool(
+    ['composio_delete_connected_account','composio_disconnect_toolkit','composio_revoke_connection','composio_delete_connection'],
+    [['composio','delete','connect'],['composio','disconnect'],['composio','revoke']]
+  );
+  if(revokeTool){
+    try{
+      toast('⏳ يُقفل الاتصال...');
+      await callTool(revokeTool,{user_id:cfg.composioUserId,toolkit:app});
+      st.connected=false;st.enabled=false;
+      persist();renderComposio();updateCount();
+      toast('✅ تم قفل الاتصال فعلياً بـ '+app);
+      return;
+    }catch(e){
+      toast('⚠️ تعذّر قفل الاتصال من الخادم ('+e.message+') — تم إيقاف الاستخدام محلياً فقط');
+    }
+  }else{
+    toast('⚠️ لا توجد أداة قفل اتصال على هذا الخادم — تم إيقاف الاستخدام محلياً فقط');
+  }
+  st.connected=false;st.enabled=false;
   persist();renderComposio();updateCount();
-  toast('تم إلغاء التفعيل محلياً — لفصل الحساب فعلياً استخدم لوحة Composio مباشرة');
 }
 async function refreshComposio(manual){
+  const listTool=findComposioTool(['composio_list_connected_tools'],[['composio','connected'],['composio','list','connect']]);
+  if(!listTool){if(manual)toast('⚠️ لا توجد أداة لعرض حالة اتصالات Composio على هذا الخادم');return;}
   try{
-    const d=await callTool('composio_list_connected_tools',{});
-    const items=d?.connected_tools||[];
+    const d=await callTool(listTool,{});
+    const items=d?.connected_tools||d?.connections||[];
     COMPOSIO_APPS.forEach(a=>{
-      appState(a.id).connected=items.some(x=>x.slug===a.id&&x.status==='ACTIVE');
+      appState(a.id).connected=items.some(x=>(x.slug||x.toolkit||x.app)===a.id&&(x.status==='ACTIVE'||x.active===true));
     });
     persist();renderComposio();
     if(manual)toast('✅ تم تحديث الحالة من الخادم');
