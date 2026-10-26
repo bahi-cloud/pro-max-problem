@@ -872,7 +872,7 @@ function loadAll(){
   cfg.composio=cfg.composio||{};cfg.zep=cfg.zep||{enabled:false,key:''};
   cfg.composioUserId=cfg.composioUserId||('u_'+Date.now().toString(36)+Math.random().toString(36).slice(2,8));
   cfg.enabledToolNames=cfg.enabledToolNames||[];
-  cfg.backend=cfg.backend||{url:'https://ayb-bh92-mcp.hf.space',authType:'none',authKey:'',list:null,execV2:null};
+  cfg.backend=cfg.backend||{url:'https://bahi-bh-test-ckod.hf.space',authType:'none',authKey:'',list:null,execV2:null};
   // ★ ترحيل تلقائي لرابط MCP: المتصفحات التي سبق أن حفظت الرابط القديم في
   // localStorage تُبقي عليه عند كل تحميل (لأنه يُقرأ من التخزين ويُطغى على
   // القيمة الافتراضية أعلاه) — هذا هو سبب عدم ظهور الرابط الجديد في الواجهة
@@ -880,8 +880,8 @@ function loadAll(){
   // هي الرابط القديم بالضبط (أي المستخدم لم يُخصّصه يدوياً برابط آخر)، نستبدله
   // تلقائياً بالجديد، ونُعيد ضبط عُقد الاكتشاف (list/execV2) لأنها خاصة
   // بالخادم القديم ولن تصلح مع الخادم الجديد.
-  if(cfg.backend.url==='https://ayb-bh92-tools.hf.space'){
-    cfg.backend.url='https://ayb-bh92-mcp.hf.space';
+  if(cfg.backend.url==='https://bahi-bh-test-ckod.hf.space'){
+    cfg.backend.url='https://bahi-bh-test-ckod.hf.space';
     cfg.backend.list=null;cfg.backend.execV2=null;
   }
   // ★ إبطال أي ذاكرة مؤقتة قديمة كانت تخزّن نمط استدعاء خاطئ (args بدل arguments)
